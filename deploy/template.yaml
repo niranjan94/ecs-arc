@@ -1,0 +1,362 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  ECS Actions Runner Controller (ecs-arc) - Deploys a controller service that
+  autoscales GitHub Actions self-hosted runners as ECS tasks.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+
+  GitHubAppClientId:
+    Type: String
+    Description: GitHub App Client ID (e.g. Iv1.abc123)
+
+  GitHubAppInstallationId:
+    Type: String
+    Description: GitHub App Installation ID
+
+  GitHubAppPrivateKeyArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret containing the GitHub App private key
+
+  GitHubOrg:
+    Type: String
+    Description: GitHub organization name
+
+  ControllerImageUri:
+    Type: String
+    Description: ECR image URI for the ecs-arc controller
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID for the ECS cluster
+
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnet IDs for ECS tasks (comma-separated)
+
+  ServiceSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group ID for ECS tasks
+
+  EcsLaunchType:
+    Type: String
+    Default: FARGATE_SPOT
+    AllowedValues: [MANAGED_INSTANCES, EXTERNAL, FARGATE_SPOT]
+    Description: >-
+      Launch type for runner tasks. MANAGED_INSTANCES uses EC2 with a capacity
+      provider. EXTERNAL uses ECS Anywhere. FARGATE_SPOT uses Fargate Spot.
+
+  ExistingClusterName:
+    Type: String
+    Default: ""
+    Description: Name of an existing ECS cluster. Leave empty to create a new one.
+
+  ScaleSetNamePrefix:
+    Type: String
+    Default: ""
+    Description: Optional prefix for scale set names (e.g. prod -> prod-runner-small)
+
+Conditions:
+  UseManagedInstances: !Equals [!Ref EcsLaunchType, MANAGED_INSTANCES]
+  UseFargateSpot: !Equals [!Ref EcsLaunchType, FARGATE_SPOT]
+  UseExternal: !Equals [!Ref EcsLaunchType, EXTERNAL]
+  CreateCluster: !Equals [!Ref ExistingClusterName, ""]
+  HasScaleSetPrefix: !Not [!Equals [!Ref ScaleSetNamePrefix, ""]]
+
+Resources:
+  # --- ECS Cluster ---
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Condition: CreateCluster
+    Properties:
+      ClusterName: !Sub "${Environment}-ecs-arc"
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Tags:
+        - Key: Project
+          Value: ecs-arc
+        - Key: Environment
+          Value: !Ref Environment
+
+  # --- CloudWatch Log Groups ---
+  ControllerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${Environment}-ecs-arc/controller"
+      RetentionInDays: 30
+
+  RunnerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${Environment}-ecs-arc/runners"
+      RetentionInDays: 14
+
+  # --- IAM Roles ---
+  ControllerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Environment}-ecs-arc-controller-execution"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: SecretsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref GitHubAppPrivateKeyArn
+
+  ControllerTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Environment}-ecs-arc-controller-task"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EcsRunnerManagement
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:RunTask
+                  - ecs:StopTask
+                  - ecs:DescribeTasks
+                  - ecs:ListTasks
+                  - ecs:DescribeTaskDefinition
+                Resource: "*"
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !If
+                      - CreateCluster
+                      - !GetAtt EcsCluster.Arn
+                      - !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ExistingClusterName}"
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !GetAtt RunnerExecutionRole.Arn
+                  - !GetAtt RunnerTaskRole.Arn
+
+  RunnerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Environment}-ecs-arc-runner-execution"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  RunnerTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Environment}-ecs-arc-runner-task"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      # Add workflow-specific permissions here
+
+  # --- Controller Task Definition ---
+  ControllerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${Environment}-ecs-arc-controller"
+      Cpu: "256"
+      Memory: "512"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ControllerExecutionRole.Arn
+      TaskRoleArn: !GetAtt ControllerTaskRole.Arn
+      ContainerDefinitions:
+        - Name: controller
+          Image: !Ref ControllerImageUri
+          Essential: true
+          Environment:
+            - Name: GITHUB_APP_CLIENT_ID
+              Value: !Ref GitHubAppClientId
+            - Name: GITHUB_APP_INSTALLATION_ID
+              Value: !Ref GitHubAppInstallationId
+            - Name: GITHUB_ORG
+              Value: !Ref GitHubOrg
+            - Name: ECS_CLUSTER
+              Value: !If
+                - CreateCluster
+                - !Ref EcsCluster
+                - !Ref ExistingClusterName
+            - Name: ECS_SUBNETS
+              Value: !Join [",", !Ref PrivateSubnetIds]
+            - Name: ECS_SECURITY_GROUPS
+              Value: !Ref ServiceSecurityGroupId
+            - Name: TASK_DEFINITIONS
+              Value: !Sub "${Environment}-runner-small,${Environment}-runner-medium,${Environment}-runner-large"
+            - Name: SCALESET_NAME_PREFIX
+              Value: !If [HasScaleSetPrefix, !Ref ScaleSetNamePrefix, !Ref "AWS::NoValue"]
+          Secrets:
+            - Name: GITHUB_APP_PRIVATE_KEY
+              ValueFrom: !Ref GitHubAppPrivateKeyArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ControllerLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: controller
+
+  # --- Controller Service ---
+  ControllerService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub "${Environment}-ecs-arc-controller"
+      Cluster: !If
+        - CreateCluster
+        - !Ref EcsCluster
+        - !Ref ExistingClusterName
+      TaskDefinition: !Ref ControllerTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref ServiceSecurityGroupId
+          AssignPublicIp: DISABLED
+      DeploymentConfiguration:
+        MaximumPercent: 100
+        MinimumHealthyPercent: 0
+
+  # --- Runner Task Definitions ---
+  RunnerSmallTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${Environment}-runner-small"
+      Cpu: !If [UseExternal, !Ref "AWS::NoValue", "1024"]
+      Memory: !If [UseExternal, !Ref "AWS::NoValue", "2048"]
+      NetworkMode: !If [UseExternal, bridge, awsvpc]
+      RequiresCompatibilities:
+        - !If [UseManagedInstances, EC2, !If [UseFargateSpot, FARGATE, EXTERNAL]]
+      ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
+      TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      ContainerDefinitions:
+        - Name: runner
+          Image: ghcr.io/actions/actions-runner-dind:latest
+          Essential: true
+          Privileged: !If [UseFargateSpot, false, true]
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref RunnerLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: runner-small
+      Tags:
+        - Key: "ecs-arc:max-runners"
+          Value: "10"
+        - Key: "ecs-arc:min-runners"
+          Value: "0"
+        - Key: "ecs-arc:max-runtime"
+          Value: "6h"
+
+  RunnerMediumTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${Environment}-runner-medium"
+      Cpu: !If [UseExternal, !Ref "AWS::NoValue", "2048"]
+      Memory: !If [UseExternal, !Ref "AWS::NoValue", "4096"]
+      NetworkMode: !If [UseExternal, bridge, awsvpc]
+      RequiresCompatibilities:
+        - !If [UseManagedInstances, EC2, !If [UseFargateSpot, FARGATE, EXTERNAL]]
+      ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
+      TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      ContainerDefinitions:
+        - Name: runner
+          Image: ghcr.io/actions/actions-runner-dind:latest
+          Essential: true
+          Privileged: !If [UseFargateSpot, false, true]
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref RunnerLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: runner-medium
+      Tags:
+        - Key: "ecs-arc:max-runners"
+          Value: "10"
+        - Key: "ecs-arc:min-runners"
+          Value: "0"
+        - Key: "ecs-arc:max-runtime"
+          Value: "6h"
+
+  RunnerLargeTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${Environment}-runner-large"
+      Cpu: !If [UseExternal, !Ref "AWS::NoValue", "4096"]
+      Memory: !If [UseExternal, !Ref "AWS::NoValue", "8192"]
+      NetworkMode: !If [UseExternal, bridge, awsvpc]
+      RequiresCompatibilities:
+        - !If [UseManagedInstances, EC2, !If [UseFargateSpot, FARGATE, EXTERNAL]]
+      ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
+      TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      ContainerDefinitions:
+        - Name: runner
+          Image: ghcr.io/actions/actions-runner-dind:latest
+          Essential: true
+          Privileged: !If [UseFargateSpot, false, true]
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref RunnerLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: runner-large
+      Tags:
+        - Key: "ecs-arc:max-runners"
+          Value: "5"
+        - Key: "ecs-arc:min-runners"
+          Value: "0"
+        - Key: "ecs-arc:max-runtime"
+          Value: "6h"
+
+Outputs:
+  ClusterName:
+    Value: !If
+      - CreateCluster
+      - !Ref EcsCluster
+      - !Ref ExistingClusterName
+
+  ControllerServiceName:
+    Value: !GetAtt ControllerService.Name
+
+  RunnerSmallTaskDefinition:
+    Value: !Ref RunnerSmallTaskDefinition
+
+  RunnerMediumTaskDefinition:
+    Value: !Ref RunnerMediumTaskDefinition
+
+  RunnerLargeTaskDefinition:
+    Value: !Ref RunnerLargeTaskDefinition
