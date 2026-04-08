@@ -151,9 +151,28 @@ func (c *Controller) runScaleSet(
 		hostname = "ecs-arc"
 	}
 
-	sessionClient, err := scalesetClient.MessageSessionClient(ctx, scaleSet.ID, hostname)
-	if err != nil {
-		return fmt.Errorf("failed to create message session: %w", err)
+	var sessionClient *scaleset.MessageSessionClient
+	for attempt := 1; ; attempt++ {
+		sessionClient, err = scalesetClient.MessageSessionClient(ctx, scaleSet.ID, hostname)
+		if err == nil {
+			break
+		}
+		if !strings.Contains(err.Error(), "SessionConflictException") && !strings.Contains(err.Error(), "409 Conflict") {
+			return fmt.Errorf("failed to create message session: %w", err)
+		}
+		if attempt >= 6 {
+			return fmt.Errorf("failed to create message session after %d attempts: %w", attempt, err)
+		}
+		wait := time.Duration(attempt) * 10 * time.Second
+		logger.Warn("session conflict, retrying",
+			slog.Int("attempt", attempt),
+			slog.Duration("backoff", wait),
+		)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
 	}
 	defer func() {
 		if err := sessionClient.Close(context.WithoutCancel(ctx)); err != nil {
