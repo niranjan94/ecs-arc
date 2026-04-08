@@ -139,12 +139,12 @@ func (c *Controller) runScaleSet(
 		}
 	}
 
-	defer func() {
-		logger.Info("deleting scale set registration")
-		if err := scalesetClient.DeleteRunnerScaleSet(context.WithoutCancel(ctx), scaleSet.ID); err != nil {
-			logger.Error("failed to delete scale set", slog.String("error", err.Error()))
-		}
-	}()
+	// Scale set registrations are deliberately NOT deleted on shutdown.
+	// During ECS deployments, the old task stops before the new one starts.
+	// Deleting the registration creates a gap where GitHub sees no scale set,
+	// causing queued jobs to fail. The new controller instance picks up the
+	// existing registration via the CreateRunnerScaleSet -> "already exists"
+	// -> UpdateRunnerScaleSet path.
 
 	hostname, _ := os.Hostname()
 	if hostname == "" {
