@@ -127,7 +127,7 @@ Conditions:
   UseExternal: !Equals [!Ref EcsLaunchType, EXTERNAL]
   CreateCluster: !Equals [!Ref ExistingClusterName, ""]
   HasRunnerExtraLabels: !Not [!Equals [!Ref RunnerExtraLabels, ""]]
-  NeedDockerSocket: !Not [!Equals [!Ref EcsLaunchType, FARGATE_SPOT]]
+  EnableDind: !Not [!Equals [!Ref EcsLaunchType, FARGATE_SPOT]]
 
 Resources:
   # --- ECS Cluster ---
@@ -349,30 +349,86 @@ Resources:
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
       Volumes: !If
-        - NeedDockerSocket
-        - - Name: docker-socket
-            Host:
-              SourcePath: /var/run/docker.sock
+        - EnableDind
+        - - Name: dind-sock
+          - Name: dind-externals
+          - Name: work
         - !Ref "AWS::NoValue"
-      ContainerDefinitions:
-        - Name: runner
-          Image: ghcr.io/actions/actions-runner:latest
-          Essential: true
-          Privileged: !If [UseFargateSpot, false, true]
-          Command:
-            - /home/runner/run.sh
-          MountPoints: !If
-            - NeedDockerSocket
-            - - SourceVolume: docker-socket
-                ContainerPath: /var/run/docker.sock
-                ReadOnly: false
-            - !Ref "AWS::NoValue"
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref RunnerLogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: runner-small
+      ContainerDefinitions: !If
+        - EnableDind
+        - - Name: init-dind-externals
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: false
+            User: "0"
+            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            MountPoints:
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/tmpDir
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-small-init
+          - Name: dind
+            Image: docker:dind
+            Essential: true
+            Privileged: true
+            Command: ["dockerd", "--host=unix:///var/run/docker.sock", "--group=123"]
+            HealthCheck:
+              Command: ["CMD", "docker", "info"]
+              StartPeriod: 120
+              Interval: 5
+              Timeout: 5
+              Retries: 3
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/externals
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-small-dind
+          - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            Environment:
+              - Name: DOCKER_HOST
+                Value: unix:///var/run/docker.sock
+              - Name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS
+                Value: "120"
+            DependsOn:
+              - ContainerName: init-dind-externals
+                Condition: SUCCESS
+              - ContainerName: dind
+                Condition: HEALTHY
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-small
+        - - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-small
       Tags:
         - Key: "ecs-arc:max-runners"
           Value: !Ref RunnerSmallMaxRunners
@@ -395,30 +451,86 @@ Resources:
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
       Volumes: !If
-        - NeedDockerSocket
-        - - Name: docker-socket
-            Host:
-              SourcePath: /var/run/docker.sock
+        - EnableDind
+        - - Name: dind-sock
+          - Name: dind-externals
+          - Name: work
         - !Ref "AWS::NoValue"
-      ContainerDefinitions:
-        - Name: runner
-          Image: ghcr.io/actions/actions-runner:latest
-          Essential: true
-          Privileged: !If [UseFargateSpot, false, true]
-          Command:
-            - /home/runner/run.sh
-          MountPoints: !If
-            - NeedDockerSocket
-            - - SourceVolume: docker-socket
-                ContainerPath: /var/run/docker.sock
-                ReadOnly: false
-            - !Ref "AWS::NoValue"
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref RunnerLogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: runner-medium
+      ContainerDefinitions: !If
+        - EnableDind
+        - - Name: init-dind-externals
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: false
+            User: "0"
+            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            MountPoints:
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/tmpDir
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-medium-init
+          - Name: dind
+            Image: docker:dind
+            Essential: true
+            Privileged: true
+            Command: ["dockerd", "--host=unix:///var/run/docker.sock", "--group=123"]
+            HealthCheck:
+              Command: ["CMD", "docker", "info"]
+              StartPeriod: 120
+              Interval: 5
+              Timeout: 5
+              Retries: 3
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/externals
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-medium-dind
+          - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            Environment:
+              - Name: DOCKER_HOST
+                Value: unix:///var/run/docker.sock
+              - Name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS
+                Value: "120"
+            DependsOn:
+              - ContainerName: init-dind-externals
+                Condition: SUCCESS
+              - ContainerName: dind
+                Condition: HEALTHY
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-medium
+        - - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-medium
       Tags:
         - Key: "ecs-arc:max-runners"
           Value: !Ref RunnerMediumMaxRunners
@@ -441,30 +553,86 @@ Resources:
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
       Volumes: !If
-        - NeedDockerSocket
-        - - Name: docker-socket
-            Host:
-              SourcePath: /var/run/docker.sock
+        - EnableDind
+        - - Name: dind-sock
+          - Name: dind-externals
+          - Name: work
         - !Ref "AWS::NoValue"
-      ContainerDefinitions:
-        - Name: runner
-          Image: ghcr.io/actions/actions-runner:latest
-          Essential: true
-          Privileged: !If [UseFargateSpot, false, true]
-          Command:
-            - /home/runner/run.sh
-          MountPoints: !If
-            - NeedDockerSocket
-            - - SourceVolume: docker-socket
-                ContainerPath: /var/run/docker.sock
-                ReadOnly: false
-            - !Ref "AWS::NoValue"
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref RunnerLogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: runner-large
+      ContainerDefinitions: !If
+        - EnableDind
+        - - Name: init-dind-externals
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: false
+            User: "0"
+            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            MountPoints:
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/tmpDir
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-large-init
+          - Name: dind
+            Image: docker:dind
+            Essential: true
+            Privileged: true
+            Command: ["dockerd", "--host=unix:///var/run/docker.sock", "--group=123"]
+            HealthCheck:
+              Command: ["CMD", "docker", "info"]
+              StartPeriod: 120
+              Interval: 5
+              Timeout: 5
+              Retries: 3
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/externals
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-large-dind
+          - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            Environment:
+              - Name: DOCKER_HOST
+                Value: unix:///var/run/docker.sock
+              - Name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS
+                Value: "120"
+            DependsOn:
+              - ContainerName: init-dind-externals
+                Condition: SUCCESS
+              - ContainerName: dind
+                Condition: HEALTHY
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-large
+        - - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-large
       Tags:
         - Key: "ecs-arc:max-runners"
           Value: !Ref RunnerLargeMaxRunners
@@ -489,30 +657,86 @@ Resources:
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
       Volumes: !If
-        - NeedDockerSocket
-        - - Name: docker-socket
-            Host:
-              SourcePath: /var/run/docker.sock
+        - EnableDind
+        - - Name: dind-sock
+          - Name: dind-externals
+          - Name: work
         - !Ref "AWS::NoValue"
-      ContainerDefinitions:
-        - Name: runner
-          Image: ghcr.io/actions/actions-runner:latest
-          Essential: true
-          Privileged: !If [UseFargateSpot, false, true]
-          Command:
-            - /home/runner/run.sh
-          MountPoints: !If
-            - NeedDockerSocket
-            - - SourceVolume: docker-socket
-                ContainerPath: /var/run/docker.sock
-                ReadOnly: false
-            - !Ref "AWS::NoValue"
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref RunnerLogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: runner-small-x64
+      ContainerDefinitions: !If
+        - EnableDind
+        - - Name: init-dind-externals
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: false
+            User: "0"
+            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            MountPoints:
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/tmpDir
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-small-x64-init
+          - Name: dind
+            Image: docker:dind
+            Essential: true
+            Privileged: true
+            Command: ["dockerd", "--host=unix:///var/run/docker.sock", "--group=123"]
+            HealthCheck:
+              Command: ["CMD", "docker", "info"]
+              StartPeriod: 120
+              Interval: 5
+              Timeout: 5
+              Retries: 3
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/externals
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-small-x64-dind
+          - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            Environment:
+              - Name: DOCKER_HOST
+                Value: unix:///var/run/docker.sock
+              - Name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS
+                Value: "120"
+            DependsOn:
+              - ContainerName: init-dind-externals
+                Condition: SUCCESS
+              - ContainerName: dind
+                Condition: HEALTHY
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-small-x64
+        - - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-small-x64
       Tags:
         - Key: "ecs-arc:max-runners"
           Value: !Ref RunnerSmallMaxRunners
@@ -536,30 +760,86 @@ Resources:
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
       Volumes: !If
-        - NeedDockerSocket
-        - - Name: docker-socket
-            Host:
-              SourcePath: /var/run/docker.sock
+        - EnableDind
+        - - Name: dind-sock
+          - Name: dind-externals
+          - Name: work
         - !Ref "AWS::NoValue"
-      ContainerDefinitions:
-        - Name: runner
-          Image: ghcr.io/actions/actions-runner:latest
-          Essential: true
-          Privileged: !If [UseFargateSpot, false, true]
-          Command:
-            - /home/runner/run.sh
-          MountPoints: !If
-            - NeedDockerSocket
-            - - SourceVolume: docker-socket
-                ContainerPath: /var/run/docker.sock
-                ReadOnly: false
-            - !Ref "AWS::NoValue"
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref RunnerLogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: runner-medium-x64
+      ContainerDefinitions: !If
+        - EnableDind
+        - - Name: init-dind-externals
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: false
+            User: "0"
+            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            MountPoints:
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/tmpDir
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-medium-x64-init
+          - Name: dind
+            Image: docker:dind
+            Essential: true
+            Privileged: true
+            Command: ["dockerd", "--host=unix:///var/run/docker.sock", "--group=123"]
+            HealthCheck:
+              Command: ["CMD", "docker", "info"]
+              StartPeriod: 120
+              Interval: 5
+              Timeout: 5
+              Retries: 3
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/externals
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-medium-x64-dind
+          - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            Environment:
+              - Name: DOCKER_HOST
+                Value: unix:///var/run/docker.sock
+              - Name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS
+                Value: "120"
+            DependsOn:
+              - ContainerName: init-dind-externals
+                Condition: SUCCESS
+              - ContainerName: dind
+                Condition: HEALTHY
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-medium-x64
+        - - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-medium-x64
       Tags:
         - Key: "ecs-arc:max-runners"
           Value: !Ref RunnerMediumMaxRunners
@@ -583,30 +863,86 @@ Resources:
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
       Volumes: !If
-        - NeedDockerSocket
-        - - Name: docker-socket
-            Host:
-              SourcePath: /var/run/docker.sock
+        - EnableDind
+        - - Name: dind-sock
+          - Name: dind-externals
+          - Name: work
         - !Ref "AWS::NoValue"
-      ContainerDefinitions:
-        - Name: runner
-          Image: ghcr.io/actions/actions-runner:latest
-          Essential: true
-          Privileged: !If [UseFargateSpot, false, true]
-          Command:
-            - /home/runner/run.sh
-          MountPoints: !If
-            - NeedDockerSocket
-            - - SourceVolume: docker-socket
-                ContainerPath: /var/run/docker.sock
-                ReadOnly: false
-            - !Ref "AWS::NoValue"
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref RunnerLogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: runner-large-x64
+      ContainerDefinitions: !If
+        - EnableDind
+        - - Name: init-dind-externals
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: false
+            User: "0"
+            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            MountPoints:
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/tmpDir
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-large-x64-init
+          - Name: dind
+            Image: docker:dind
+            Essential: true
+            Privileged: true
+            Command: ["dockerd", "--host=unix:///var/run/docker.sock", "--group=123"]
+            HealthCheck:
+              Command: ["CMD", "docker", "info"]
+              StartPeriod: 120
+              Interval: 5
+              Timeout: 5
+              Retries: 3
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/externals
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-large-x64-dind
+          - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            Environment:
+              - Name: DOCKER_HOST
+                Value: unix:///var/run/docker.sock
+              - Name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS
+                Value: "120"
+            DependsOn:
+              - ContainerName: init-dind-externals
+                Condition: SUCCESS
+              - ContainerName: dind
+                Condition: HEALTHY
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-large-x64
+        - - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-large-x64
       Tags:
         - Key: "ecs-arc:max-runners"
           Value: !Ref RunnerLargeMaxRunners
@@ -631,30 +967,86 @@ Resources:
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
       Volumes: !If
-        - NeedDockerSocket
-        - - Name: docker-socket
-            Host:
-              SourcePath: /var/run/docker.sock
+        - EnableDind
+        - - Name: dind-sock
+          - Name: dind-externals
+          - Name: work
         - !Ref "AWS::NoValue"
-      ContainerDefinitions:
-        - Name: runner
-          Image: ghcr.io/actions/actions-runner:latest
-          Essential: true
-          Privileged: !If [UseFargateSpot, false, true]
-          Command:
-            - /home/runner/run.sh
-          MountPoints: !If
-            - NeedDockerSocket
-            - - SourceVolume: docker-socket
-                ContainerPath: /var/run/docker.sock
-                ReadOnly: false
-            - !Ref "AWS::NoValue"
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref RunnerLogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: runner-small-arm64
+      ContainerDefinitions: !If
+        - EnableDind
+        - - Name: init-dind-externals
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: false
+            User: "0"
+            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            MountPoints:
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/tmpDir
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-small-arm64-init
+          - Name: dind
+            Image: docker:dind
+            Essential: true
+            Privileged: true
+            Command: ["dockerd", "--host=unix:///var/run/docker.sock", "--group=123"]
+            HealthCheck:
+              Command: ["CMD", "docker", "info"]
+              StartPeriod: 120
+              Interval: 5
+              Timeout: 5
+              Retries: 3
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/externals
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-small-arm64-dind
+          - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            Environment:
+              - Name: DOCKER_HOST
+                Value: unix:///var/run/docker.sock
+              - Name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS
+                Value: "120"
+            DependsOn:
+              - ContainerName: init-dind-externals
+                Condition: SUCCESS
+              - ContainerName: dind
+                Condition: HEALTHY
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-small-arm64
+        - - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-small-arm64
       Tags:
         - Key: "ecs-arc:max-runners"
           Value: !Ref RunnerSmallMaxRunners
@@ -678,30 +1070,86 @@ Resources:
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
       Volumes: !If
-        - NeedDockerSocket
-        - - Name: docker-socket
-            Host:
-              SourcePath: /var/run/docker.sock
+        - EnableDind
+        - - Name: dind-sock
+          - Name: dind-externals
+          - Name: work
         - !Ref "AWS::NoValue"
-      ContainerDefinitions:
-        - Name: runner
-          Image: ghcr.io/actions/actions-runner:latest
-          Essential: true
-          Privileged: !If [UseFargateSpot, false, true]
-          Command:
-            - /home/runner/run.sh
-          MountPoints: !If
-            - NeedDockerSocket
-            - - SourceVolume: docker-socket
-                ContainerPath: /var/run/docker.sock
-                ReadOnly: false
-            - !Ref "AWS::NoValue"
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref RunnerLogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: runner-medium-arm64
+      ContainerDefinitions: !If
+        - EnableDind
+        - - Name: init-dind-externals
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: false
+            User: "0"
+            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            MountPoints:
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/tmpDir
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-medium-arm64-init
+          - Name: dind
+            Image: docker:dind
+            Essential: true
+            Privileged: true
+            Command: ["dockerd", "--host=unix:///var/run/docker.sock", "--group=123"]
+            HealthCheck:
+              Command: ["CMD", "docker", "info"]
+              StartPeriod: 120
+              Interval: 5
+              Timeout: 5
+              Retries: 3
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/externals
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-medium-arm64-dind
+          - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            Environment:
+              - Name: DOCKER_HOST
+                Value: unix:///var/run/docker.sock
+              - Name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS
+                Value: "120"
+            DependsOn:
+              - ContainerName: init-dind-externals
+                Condition: SUCCESS
+              - ContainerName: dind
+                Condition: HEALTHY
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-medium-arm64
+        - - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-medium-arm64
       Tags:
         - Key: "ecs-arc:max-runners"
           Value: !Ref RunnerMediumMaxRunners
@@ -725,30 +1173,86 @@ Resources:
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
       Volumes: !If
-        - NeedDockerSocket
-        - - Name: docker-socket
-            Host:
-              SourcePath: /var/run/docker.sock
+        - EnableDind
+        - - Name: dind-sock
+          - Name: dind-externals
+          - Name: work
         - !Ref "AWS::NoValue"
-      ContainerDefinitions:
-        - Name: runner
-          Image: ghcr.io/actions/actions-runner:latest
-          Essential: true
-          Privileged: !If [UseFargateSpot, false, true]
-          Command:
-            - /home/runner/run.sh
-          MountPoints: !If
-            - NeedDockerSocket
-            - - SourceVolume: docker-socket
-                ContainerPath: /var/run/docker.sock
-                ReadOnly: false
-            - !Ref "AWS::NoValue"
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref RunnerLogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: runner-large-arm64
+      ContainerDefinitions: !If
+        - EnableDind
+        - - Name: init-dind-externals
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: false
+            User: "0"
+            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            MountPoints:
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/tmpDir
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-large-arm64-init
+          - Name: dind
+            Image: docker:dind
+            Essential: true
+            Privileged: true
+            Command: ["dockerd", "--host=unix:///var/run/docker.sock", "--group=123"]
+            HealthCheck:
+              Command: ["CMD", "docker", "info"]
+              StartPeriod: 120
+              Interval: 5
+              Timeout: 5
+              Retries: 3
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+              - SourceVolume: dind-externals
+                ContainerPath: /home/runner/externals
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-large-arm64-dind
+          - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            Environment:
+              - Name: DOCKER_HOST
+                Value: unix:///var/run/docker.sock
+              - Name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS
+                Value: "120"
+            DependsOn:
+              - ContainerName: init-dind-externals
+                Condition: SUCCESS
+              - ContainerName: dind
+                Condition: HEALTHY
+            MountPoints:
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
+              - SourceVolume: dind-sock
+                ContainerPath: /var/run
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-large-arm64
+        - - Name: runner
+            Image: ghcr.io/actions/actions-runner:latest
+            Essential: true
+            Command: ["/home/runner/run.sh"]
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref RunnerLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: runner-large-arm64
       Tags:
         - Key: "ecs-arc:max-runners"
           Value: !Ref RunnerLargeMaxRunners
