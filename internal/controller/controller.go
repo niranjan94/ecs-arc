@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -115,14 +116,27 @@ func (c *Controller) runScaleSet(
 		labels = append(labels, scaleset.Label{Name: l, Type: "System"})
 	}
 
-	scaleSet, err := scalesetClient.CreateRunnerScaleSet(ctx, &scaleset.RunnerScaleSet{
+	desired := &scaleset.RunnerScaleSet{
 		Name:          scaleSetName,
 		RunnerGroupID: 1,
 		Labels:        labels,
 		RunnerSetting: scaleset.RunnerSetting{DisableUpdate: true},
-	})
+	}
+
+	scaleSet, err := scalesetClient.CreateRunnerScaleSet(ctx, desired)
 	if err != nil {
-		return fmt.Errorf("failed to create runner scale set: %w", err)
+		if !strings.Contains(err.Error(), "RunnerScaleSetExistsException") {
+			return fmt.Errorf("failed to create runner scale set: %w", err)
+		}
+		logger.Info("scale set already exists, updating")
+		existing, getErr := scalesetClient.GetRunnerScaleSet(ctx, desired.RunnerGroupID, scaleSetName)
+		if getErr != nil {
+			return fmt.Errorf("failed to get existing scale set: %w", getErr)
+		}
+		scaleSet, err = scalesetClient.UpdateRunnerScaleSet(ctx, existing.ID, desired)
+		if err != nil {
+			return fmt.Errorf("failed to update existing scale set: %w", err)
+		}
 	}
 
 	defer func() {
