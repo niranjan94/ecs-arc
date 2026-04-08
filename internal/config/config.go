@@ -92,17 +92,11 @@ func Load() (*Config, error) {
 		missing = append(missing, "ECS_CLUSTER")
 	}
 
-	subnets := os.Getenv("ECS_SUBNETS")
-	if subnets == "" {
-		missing = append(missing, "ECS_SUBNETS")
-	} else {
+	if subnets := os.Getenv("ECS_SUBNETS"); subnets != "" {
 		cfg.ECSSubnets = splitCSV(subnets)
 	}
 
-	sgs := os.Getenv("ECS_SECURITY_GROUPS")
-	if sgs == "" {
-		missing = append(missing, "ECS_SECURITY_GROUPS")
-	} else {
+	if sgs := os.Getenv("ECS_SECURITY_GROUPS"); sgs != "" {
 		cfg.ECSSecurityGroups = splitCSV(sgs)
 	}
 
