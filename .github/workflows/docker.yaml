@@ -6,6 +6,10 @@ on:
   release:
     types: [published]
 
+concurrency:
+  group: docker-${{ github.event_name == 'release' && github.event.release.tag_name || 'tip' }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: write
