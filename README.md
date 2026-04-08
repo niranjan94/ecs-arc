@@ -24,7 +24,7 @@ aws cloudformation deploy \
     GitHubAppInstallationId=12345 \
     GitHubAppPrivateKeyArn=arn:aws:secretsmanager:us-east-1:123456789:secret:gh-app-key \
     GitHubOrg=my-org \
-    ControllerImageUri=123456789.dkr.ecr.us-east-1.amazonaws.com/ecs-arc:latest \
+    ControllerImageUri=ghcr.io/niranjan94/ecs-arc:latest \
     VpcId=vpc-xxx \
     PrivateSubnetIds=subnet-aaa,subnet-bbb \
     ServiceSecurityGroupId=sg-xxx \
@@ -130,6 +130,21 @@ go test ./... -v -race
 ```
 
 ### Docker
+
+Pre-built multi-arch images (linux/amd64, linux/arm64) are published to GitHub Container Registry:
+
+```bash
+# Latest tip from main
+docker pull ghcr.io/niranjan94/ecs-arc:tip
+
+# Specific release
+docker pull ghcr.io/niranjan94/ecs-arc:1.0.0
+
+# Latest stable release
+docker pull ghcr.io/niranjan94/ecs-arc:latest
+```
+
+To build locally:
 
 ```bash
 docker build -t ecs-arc:dev .
