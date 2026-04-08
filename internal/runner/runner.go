@@ -30,6 +30,7 @@ type RunTaskInput struct {
 	Subnets          []string
 	SecurityGroups   []string
 	CapacityProvider string
+	LaunchType       ecsTypes.LaunchType
 }
 
 // ECSRunner manages ECS tasks for GitHub Actions runners.
@@ -88,13 +89,13 @@ func (r *ECSRunner) RunTask(ctx context.Context, input RunTaskInput) (string, er
 		}
 	}
 
-	// Capacity provider strategy
+	// Capacity provider strategy (mutually exclusive with launch type)
 	if input.CapacityProvider != "" {
 		ecsInput.CapacityProviderStrategy = []ecsTypes.CapacityProviderStrategyItem{
 			{CapacityProvider: aws.String(input.CapacityProvider), Weight: 1},
 		}
-	} else if len(input.Subnets) > 0 {
-		ecsInput.LaunchType = ecsTypes.LaunchTypeFargate
+	} else if input.LaunchType != "" {
+		ecsInput.LaunchType = input.LaunchType
 	}
 
 	result, err := r.client.RunTask(ctx, ecsInput)

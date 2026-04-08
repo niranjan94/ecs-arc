@@ -170,6 +170,7 @@ func (s *ECSScaler) startRunner(ctx context.Context) error {
 		Subnets:          s.config.Subnets,
 		SecurityGroups:   s.config.SecurityGroups,
 		CapacityProvider: s.config.CapacityProvider,
+		LaunchType:       s.config.LaunchType,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to run task: %w", err)

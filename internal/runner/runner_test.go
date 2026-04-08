@@ -128,6 +128,7 @@ func TestRunTask_NoNetworkConfigForExternal(t *testing.T) {
 		JITConfigEncoded: "jit",
 		RunnerName:       "runner-abc",
 		ScaleSetName:     "prod-runner-small",
+		LaunchType:       ecsTypes.LaunchTypeExternal,
 	}
 
 	_, err := r.RunTask(context.Background(), input)
@@ -137,5 +138,8 @@ func TestRunTask_NoNetworkConfigForExternal(t *testing.T) {
 
 	if mock.lastRunTaskInput.NetworkConfiguration != nil {
 		t.Error("expected no network configuration for EXTERNAL mode")
+	}
+	if mock.lastRunTaskInput.LaunchType != ecsTypes.LaunchTypeExternal {
+		t.Errorf("expected launch type EXTERNAL, got %q", mock.lastRunTaskInput.LaunchType)
 	}
 }

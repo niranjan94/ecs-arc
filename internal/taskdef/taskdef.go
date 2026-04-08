@@ -41,6 +41,8 @@ type ScaleSetConfig struct {
 	Subnets          []string
 	SecurityGroups   []string
 	CapacityProvider string
+	// LaunchType is derived from the task definition's RequiresCompatibilities.
+	LaunchType ecsTypes.LaunchType
 	// ExtraLabels are additional GitHub Actions labels for the scale set,
 	// including automatic OS/arch labels derived from the task definition's
 	// RuntimePlatform and any user-specified labels.
@@ -147,12 +149,31 @@ func LoadAll(ctx context.Context, describer ECSDescriber, families []string, def
 		}
 		cfg := ParseScaleSetConfig(tags, defaults)
 		cfg.ExtraLabels = buildExtraLabels(taskDef, defaults.ExtraLabels)
+		cfg.LaunchType = resolveLaunchType(taskDef)
 		results[family] = &TaskDefInfo{
 			TaskDefinition: taskDef,
 			Config:         cfg,
 		}
 	}
 	return results, nil
+}
+
+// resolveLaunchType maps the task definition's RequiresCompatibilities to the
+// ECS launch type used in RunTask. EC2 compatibility is treated as FARGATE
+// only when subnets are present (handled by the caller); here we just return
+// the first recognized compatibility.
+func resolveLaunchType(taskDef *ecsTypes.TaskDefinition) ecsTypes.LaunchType {
+	for _, c := range taskDef.RequiresCompatibilities {
+		switch c {
+		case ecsTypes.CompatibilityFargate:
+			return ecsTypes.LaunchTypeFargate
+		case ecsTypes.CompatibilityExternal:
+			return ecsTypes.LaunchTypeExternal
+		case ecsTypes.CompatibilityEc2:
+			return ecsTypes.LaunchTypeEc2
+		}
+	}
+	return ""
 }
 
 func buildExtraLabels(taskDef *ecsTypes.TaskDefinition, userLabels []string) []string {

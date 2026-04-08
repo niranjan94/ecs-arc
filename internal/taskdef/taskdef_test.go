@@ -162,6 +162,46 @@ func TestBuildExtraLabels_NoLabelsOrPlatform(t *testing.T) {
 	}
 }
 
+func TestResolveLaunchType(t *testing.T) {
+	tests := []struct {
+		name   string
+		compat []ecsTypes.Compatibility
+		want   ecsTypes.LaunchType
+	}{
+		{"Fargate", []ecsTypes.Compatibility{ecsTypes.CompatibilityFargate}, ecsTypes.LaunchTypeFargate},
+		{"External", []ecsTypes.Compatibility{ecsTypes.CompatibilityExternal}, ecsTypes.LaunchTypeExternal},
+		{"EC2", []ecsTypes.Compatibility{ecsTypes.CompatibilityEc2}, ecsTypes.LaunchTypeEc2},
+		{"empty", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			taskDef := &ecsTypes.TaskDefinition{RequiresCompatibilities: tt.compat}
+			got := resolveLaunchType(taskDef)
+			if got != tt.want {
+				t.Errorf("resolveLaunchType() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadAll_SetsLaunchType(t *testing.T) {
+	mock := &mockECSDescriber{
+		taskDef: &ecsTypes.TaskDefinition{
+			TaskDefinitionArn:       aws.String("arn:aws:ecs:us-east-1:123:task-definition/runner-small:1"),
+			RequiresCompatibilities: []ecsTypes.Compatibility{ecsTypes.CompatibilityExternal},
+		},
+		tags: []ecsTypes.Tag{},
+	}
+
+	results, err := LoadAll(context.Background(), mock, []string{"runner-small"}, Defaults{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if results["runner-small"].Config.LaunchType != ecsTypes.LaunchTypeExternal {
+		t.Errorf("LaunchType = %q, want EXTERNAL", results["runner-small"].Config.LaunchType)
+	}
+}
+
 func TestLoadAll_ExtraLabelsFromRuntimePlatform(t *testing.T) {
 	mock := &mockECSDescriber{
 		taskDef: &ecsTypes.TaskDefinition{
