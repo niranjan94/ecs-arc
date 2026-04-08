@@ -8,7 +8,7 @@ A Go-based controller that autoscales GitHub Actions self-hosted runners as ECS 
   - **Organization permissions**: Self-hosted runners (Read & Write)
 - An AWS account with an ECS cluster
 - ECS task definitions for your runner sizes (the controller reads these at startup)
-- The official ARC runner image: `ghcr.io/actions/actions-runner-dind`
+- The official ARC runner image: `ghcr.io/actions/actions-runner`
 
 ## Quick Start
 

@@ -127,6 +127,7 @@ Conditions:
   UseExternal: !Equals [!Ref EcsLaunchType, EXTERNAL]
   CreateCluster: !Equals [!Ref ExistingClusterName, ""]
   HasRunnerExtraLabels: !Not [!Equals [!Ref RunnerExtraLabels, ""]]
+  NeedDockerSocket: !Not [!Equals [!Ref EcsLaunchType, FARGATE_SPOT]]
 
 Resources:
   # --- ECS Cluster ---
@@ -347,11 +348,25 @@ Resources:
         OperatingSystemFamily: LINUX
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      Volumes: !If
+        - NeedDockerSocket
+        - - Name: docker-socket
+            Host:
+              SourcePath: /var/run/docker.sock
+        - !Ref "AWS::NoValue"
       ContainerDefinitions:
         - Name: runner
-          Image: ghcr.io/actions/actions-runner-dind:latest
+          Image: ghcr.io/actions/actions-runner:latest
           Essential: true
           Privileged: !If [UseFargateSpot, false, true]
+          Command:
+            - /home/runner/run.sh
+          MountPoints: !If
+            - NeedDockerSocket
+            - - SourceVolume: docker-socket
+                ContainerPath: /var/run/docker.sock
+                ReadOnly: false
+            - !Ref "AWS::NoValue"
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -379,11 +394,25 @@ Resources:
         OperatingSystemFamily: LINUX
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      Volumes: !If
+        - NeedDockerSocket
+        - - Name: docker-socket
+            Host:
+              SourcePath: /var/run/docker.sock
+        - !Ref "AWS::NoValue"
       ContainerDefinitions:
         - Name: runner
-          Image: ghcr.io/actions/actions-runner-dind:latest
+          Image: ghcr.io/actions/actions-runner:latest
           Essential: true
           Privileged: !If [UseFargateSpot, false, true]
+          Command:
+            - /home/runner/run.sh
+          MountPoints: !If
+            - NeedDockerSocket
+            - - SourceVolume: docker-socket
+                ContainerPath: /var/run/docker.sock
+                ReadOnly: false
+            - !Ref "AWS::NoValue"
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -411,11 +440,25 @@ Resources:
         OperatingSystemFamily: LINUX
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      Volumes: !If
+        - NeedDockerSocket
+        - - Name: docker-socket
+            Host:
+              SourcePath: /var/run/docker.sock
+        - !Ref "AWS::NoValue"
       ContainerDefinitions:
         - Name: runner
-          Image: ghcr.io/actions/actions-runner-dind:latest
+          Image: ghcr.io/actions/actions-runner:latest
           Essential: true
           Privileged: !If [UseFargateSpot, false, true]
+          Command:
+            - /home/runner/run.sh
+          MountPoints: !If
+            - NeedDockerSocket
+            - - SourceVolume: docker-socket
+                ContainerPath: /var/run/docker.sock
+                ReadOnly: false
+            - !Ref "AWS::NoValue"
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -445,11 +488,25 @@ Resources:
         CpuArchitecture: X86_64
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      Volumes: !If
+        - NeedDockerSocket
+        - - Name: docker-socket
+            Host:
+              SourcePath: /var/run/docker.sock
+        - !Ref "AWS::NoValue"
       ContainerDefinitions:
         - Name: runner
-          Image: ghcr.io/actions/actions-runner-dind:latest
+          Image: ghcr.io/actions/actions-runner:latest
           Essential: true
           Privileged: !If [UseFargateSpot, false, true]
+          Command:
+            - /home/runner/run.sh
+          MountPoints: !If
+            - NeedDockerSocket
+            - - SourceVolume: docker-socket
+                ContainerPath: /var/run/docker.sock
+                ReadOnly: false
+            - !Ref "AWS::NoValue"
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -478,11 +535,25 @@ Resources:
         CpuArchitecture: X86_64
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      Volumes: !If
+        - NeedDockerSocket
+        - - Name: docker-socket
+            Host:
+              SourcePath: /var/run/docker.sock
+        - !Ref "AWS::NoValue"
       ContainerDefinitions:
         - Name: runner
-          Image: ghcr.io/actions/actions-runner-dind:latest
+          Image: ghcr.io/actions/actions-runner:latest
           Essential: true
           Privileged: !If [UseFargateSpot, false, true]
+          Command:
+            - /home/runner/run.sh
+          MountPoints: !If
+            - NeedDockerSocket
+            - - SourceVolume: docker-socket
+                ContainerPath: /var/run/docker.sock
+                ReadOnly: false
+            - !Ref "AWS::NoValue"
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -511,11 +582,25 @@ Resources:
         CpuArchitecture: X86_64
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      Volumes: !If
+        - NeedDockerSocket
+        - - Name: docker-socket
+            Host:
+              SourcePath: /var/run/docker.sock
+        - !Ref "AWS::NoValue"
       ContainerDefinitions:
         - Name: runner
-          Image: ghcr.io/actions/actions-runner-dind:latest
+          Image: ghcr.io/actions/actions-runner:latest
           Essential: true
           Privileged: !If [UseFargateSpot, false, true]
+          Command:
+            - /home/runner/run.sh
+          MountPoints: !If
+            - NeedDockerSocket
+            - - SourceVolume: docker-socket
+                ContainerPath: /var/run/docker.sock
+                ReadOnly: false
+            - !Ref "AWS::NoValue"
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -545,11 +630,25 @@ Resources:
         CpuArchitecture: ARM64
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      Volumes: !If
+        - NeedDockerSocket
+        - - Name: docker-socket
+            Host:
+              SourcePath: /var/run/docker.sock
+        - !Ref "AWS::NoValue"
       ContainerDefinitions:
         - Name: runner
-          Image: ghcr.io/actions/actions-runner-dind:latest
+          Image: ghcr.io/actions/actions-runner:latest
           Essential: true
           Privileged: !If [UseFargateSpot, false, true]
+          Command:
+            - /home/runner/run.sh
+          MountPoints: !If
+            - NeedDockerSocket
+            - - SourceVolume: docker-socket
+                ContainerPath: /var/run/docker.sock
+                ReadOnly: false
+            - !Ref "AWS::NoValue"
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -578,11 +677,25 @@ Resources:
         CpuArchitecture: ARM64
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      Volumes: !If
+        - NeedDockerSocket
+        - - Name: docker-socket
+            Host:
+              SourcePath: /var/run/docker.sock
+        - !Ref "AWS::NoValue"
       ContainerDefinitions:
         - Name: runner
-          Image: ghcr.io/actions/actions-runner-dind:latest
+          Image: ghcr.io/actions/actions-runner:latest
           Essential: true
           Privileged: !If [UseFargateSpot, false, true]
+          Command:
+            - /home/runner/run.sh
+          MountPoints: !If
+            - NeedDockerSocket
+            - - SourceVolume: docker-socket
+                ContainerPath: /var/run/docker.sock
+                ReadOnly: false
+            - !Ref "AWS::NoValue"
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -611,11 +724,25 @@ Resources:
         CpuArchitecture: ARM64
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      Volumes: !If
+        - NeedDockerSocket
+        - - Name: docker-socket
+            Host:
+              SourcePath: /var/run/docker.sock
+        - !Ref "AWS::NoValue"
       ContainerDefinitions:
         - Name: runner
-          Image: ghcr.io/actions/actions-runner-dind:latest
+          Image: ghcr.io/actions/actions-runner:latest
           Essential: true
           Privileged: !If [UseFargateSpot, false, true]
+          Command:
+            - /home/runner/run.sh
+          MountPoints: !If
+            - NeedDockerSocket
+            - - SourceVolume: docker-socket
+                ContainerPath: /var/run/docker.sock
+                ReadOnly: false
+            - !Ref "AWS::NoValue"
           LogConfiguration:
             LogDriver: awslogs
             Options:
