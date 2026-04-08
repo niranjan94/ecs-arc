@@ -41,6 +41,10 @@ type ScaleSetConfig struct {
 	Subnets          []string
 	SecurityGroups   []string
 	CapacityProvider string
+	// ExtraLabels are additional GitHub Actions labels for the scale set,
+	// including automatic OS/arch labels derived from the task definition's
+	// RuntimePlatform and any user-specified labels.
+	ExtraLabels []string
 }
 
 // Defaults holds the global default values that apply when tags are absent.
@@ -48,6 +52,7 @@ type Defaults struct {
 	Subnets          []string
 	SecurityGroups   []string
 	CapacityProvider string
+	ExtraLabels      []string
 }
 
 // TaskDefInfo holds a resolved task definition and its parsed scale set config.
@@ -141,12 +146,27 @@ func LoadAll(ctx context.Context, describer ECSDescriber, families []string, def
 			return nil, fmt.Errorf("task definition %q: %w", family, err)
 		}
 		cfg := ParseScaleSetConfig(tags, defaults)
+		cfg.ExtraLabels = buildExtraLabels(taskDef, defaults.ExtraLabels)
 		results[family] = &TaskDefInfo{
 			TaskDefinition: taskDef,
 			Config:         cfg,
 		}
 	}
 	return results, nil
+}
+
+func buildExtraLabels(taskDef *ecsTypes.TaskDefinition, userLabels []string) []string {
+	var labels []string
+	if taskDef.RuntimePlatform != nil {
+		if os := string(taskDef.RuntimePlatform.OperatingSystemFamily); os != "" {
+			labels = append(labels, strings.ToLower(os))
+		}
+		if arch := string(taskDef.RuntimePlatform.CpuArchitecture); arch != "" {
+			labels = append(labels, strings.ToLower(arch))
+		}
+	}
+	labels = append(labels, userLabels...)
+	return labels
 }
 
 func splitCSV(s string) []string {

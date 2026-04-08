@@ -71,6 +71,37 @@ func TestScaleSetName(t *testing.T) {
 	}
 }
 
+func TestLoad_RunnerExtraLabels(t *testing.T) {
+	setAllRequired(t)
+	t.Setenv("RUNNER_EXTRA_LABELS", "self-hosted, custom-label, gpu")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"self-hosted", "custom-label", "gpu"}
+	if len(cfg.RunnerExtraLabels) != len(want) {
+		t.Fatalf("got %v, want %v", cfg.RunnerExtraLabels, want)
+	}
+	for i, l := range cfg.RunnerExtraLabels {
+		if l != want[i] {
+			t.Errorf("RunnerExtraLabels[%d] = %q, want %q", i, l, want[i])
+		}
+	}
+}
+
+func TestLoad_RunnerExtraLabelsEmpty(t *testing.T) {
+	setAllRequired(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RunnerExtraLabels != nil {
+		t.Errorf("got %v, want nil", cfg.RunnerExtraLabels)
+	}
+}
+
 func setAllRequired(t *testing.T) {
 	t.Helper()
 	t.Setenv("GITHUB_APP_CLIENT_ID", "Iv1.abc123")

@@ -120,3 +120,76 @@ func TestLoadAll_Success(t *testing.T) {
 		t.Errorf("MaxRunners = %d, want 5", results["runner-small"].Config.MaxRunners)
 	}
 }
+
+func TestBuildExtraLabels_WithRuntimePlatform(t *testing.T) {
+	taskDef := &ecsTypes.TaskDefinition{
+		RuntimePlatform: &ecsTypes.RuntimePlatform{
+			OperatingSystemFamily: ecsTypes.OSFamilyLinux,
+			CpuArchitecture:       ecsTypes.CPUArchitectureArm64,
+		},
+	}
+
+	labels := buildExtraLabels(taskDef, []string{"self-hosted", "custom"})
+
+	want := []string{"linux", "arm64", "self-hosted", "custom"}
+	if len(labels) != len(want) {
+		t.Fatalf("got %v, want %v", labels, want)
+	}
+	for i, l := range labels {
+		if l != want[i] {
+			t.Errorf("labels[%d] = %q, want %q", i, l, want[i])
+		}
+	}
+}
+
+func TestBuildExtraLabels_WithoutRuntimePlatform(t *testing.T) {
+	taskDef := &ecsTypes.TaskDefinition{}
+
+	labels := buildExtraLabels(taskDef, []string{"self-hosted"})
+
+	if len(labels) != 1 || labels[0] != "self-hosted" {
+		t.Errorf("got %v, want [self-hosted]", labels)
+	}
+}
+
+func TestBuildExtraLabels_NoLabelsOrPlatform(t *testing.T) {
+	taskDef := &ecsTypes.TaskDefinition{}
+
+	labels := buildExtraLabels(taskDef, nil)
+
+	if len(labels) != 0 {
+		t.Errorf("got %v, want empty", labels)
+	}
+}
+
+func TestLoadAll_ExtraLabelsFromRuntimePlatform(t *testing.T) {
+	mock := &mockECSDescriber{
+		taskDef: &ecsTypes.TaskDefinition{
+			TaskDefinitionArn: aws.String("arn:aws:ecs:us-east-1:123:task-definition/runner-small:1"),
+			RuntimePlatform: &ecsTypes.RuntimePlatform{
+				OperatingSystemFamily: ecsTypes.OSFamilyLinux,
+				CpuArchitecture:       ecsTypes.CPUArchitectureX8664,
+			},
+		},
+		tags: []ecsTypes.Tag{},
+	}
+	defaults := Defaults{
+		ExtraLabels: []string{"custom-label"},
+	}
+
+	results, err := LoadAll(context.Background(), mock, []string{"runner-small"}, defaults)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	labels := results["runner-small"].Config.ExtraLabels
+	want := []string{"linux", "x86_64", "custom-label"}
+	if len(labels) != len(want) {
+		t.Fatalf("ExtraLabels = %v, want %v", labels, want)
+	}
+	for i, l := range labels {
+		if l != want[i] {
+			t.Errorf("ExtraLabels[%d] = %q, want %q", i, l, want[i])
+		}
+	}
+}

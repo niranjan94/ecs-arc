@@ -38,6 +38,10 @@ type Config struct {
 
 	// TaskDefinitions is the list of ECS task definition family names.
 	TaskDefinitions []string
+
+	// RunnerExtraLabels are additional GitHub Actions labels to apply to every
+	// runner scale set. Comma-separated list of label names.
+	RunnerExtraLabels []string
 }
 
 // ScaleSetName returns the scale set name for a given task definition family.
@@ -107,6 +111,10 @@ func Load() (*Config, error) {
 		missing = append(missing, "TASK_DEFINITIONS")
 	} else {
 		cfg.TaskDefinitions = splitCSV(taskDefs)
+	}
+
+	if extraLabels := os.Getenv("RUNNER_EXTRA_LABELS"); extraLabels != "" {
+		cfg.RunnerExtraLabels = splitCSV(extraLabels)
 	}
 
 	if len(missing) > 0 {

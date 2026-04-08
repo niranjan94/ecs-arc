@@ -44,6 +44,7 @@ func (c *Controller) Run(ctx context.Context) error {
 		Subnets:          c.cfg.ECSSubnets,
 		SecurityGroups:   c.cfg.ECSSecurityGroups,
 		CapacityProvider: c.cfg.ECSCapacityProvider,
+		ExtraLabels:      c.cfg.RunnerExtraLabels,
 	}
 
 	taskDefs, err := taskdef.LoadAll(ctx, describer, c.cfg.TaskDefinitions, defaults)
@@ -109,10 +110,15 @@ func (c *Controller) runScaleSet(
 	logger := c.logger.With(slog.String("scale_set", scaleSetName))
 	logger.Info("registering scale set")
 
+	labels := []scaleset.Label{{Name: scaleSetName, Type: "System"}}
+	for _, l := range info.Config.ExtraLabels {
+		labels = append(labels, scaleset.Label{Name: l, Type: "System"})
+	}
+
 	scaleSet, err := scalesetClient.CreateRunnerScaleSet(ctx, &scaleset.RunnerScaleSet{
 		Name:          scaleSetName,
 		RunnerGroupID: 1,
-		Labels:        []scaleset.Label{{Name: scaleSetName, Type: "System"}},
+		Labels:        labels,
 		RunnerSetting: scaleset.RunnerSetting{DisableUpdate: true},
 	})
 	if err != nil {
