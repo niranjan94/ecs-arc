@@ -134,7 +134,6 @@ Resources:
                   - ecs:StopTask
                   - ecs:DescribeTasks
                   - ecs:ListTasks
-                  - ecs:DescribeTaskDefinition
                 Resource: "*"
                 Condition:
                   ArnEquals:
@@ -142,6 +141,10 @@ Resources:
                       - CreateCluster
                       - !GetAtt EcsCluster.Arn
                       - !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ExistingClusterName}"
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeTaskDefinition
+                Resource: "*"
               - Effect: Allow
                 Action:
                   - iam:PassRole
@@ -193,6 +196,8 @@ Resources:
           Image: !Ref ControllerImageUri
           Essential: true
           Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
             - Name: GITHUB_APP_CLIENT_ID
               Value: !Ref GitHubAppClientId
             - Name: GITHUB_APP_INSTALLATION_ID
