@@ -53,11 +53,20 @@ Parameters:
     Default: ""
     Description: Name of an existing ECS cluster. Leave empty to create a new one.
 
+  RunnerExtraLabels:
+    Type: String
+    Default: ""
+    Description: >-
+      Additional GitHub Actions labels to apply to all runner scale sets,
+      comma-separated (e.g. "self-hosted,custom-label"). OS and architecture
+      labels are added automatically from the task definition's RuntimePlatform.
+
 Conditions:
   UseManagedInstances: !Equals [!Ref EcsLaunchType, MANAGED_INSTANCES]
   UseFargateSpot: !Equals [!Ref EcsLaunchType, FARGATE_SPOT]
   UseExternal: !Equals [!Ref EcsLaunchType, EXTERNAL]
   CreateCluster: !Equals [!Ref ExistingClusterName, ""]
+  HasRunnerExtraLabels: !Not [!Equals [!Ref RunnerExtraLabels, ""]]
 
 Resources:
   # --- ECS Cluster ---
@@ -189,6 +198,8 @@ Resources:
       NetworkMode: !If [UseExternal, bridge, awsvpc]
       RequiresCompatibilities:
         - !If [UseExternal, EXTERNAL, FARGATE]
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
       ExecutionRoleArn: !GetAtt ControllerExecutionRole.Arn
       TaskRoleArn: !GetAtt ControllerTaskRole.Arn
       ContainerDefinitions:
@@ -220,7 +231,12 @@ Resources:
               - Name: ECS_SECURITY_GROUPS
                 Value: !Ref ServiceSecurityGroupId
             - Name: TASK_DEFINITIONS
-              Value: !Sub "${Environment}-runner-small,${Environment}-runner-medium,${Environment}-runner-large"
+              Value: !Sub "${Environment}-runner-small,${Environment}-runner-medium,${Environment}-runner-large,${Environment}-runner-small-arm64,${Environment}-runner-medium-arm64,${Environment}-runner-large-arm64"
+            - !If
+              - HasRunnerExtraLabels
+              - Name: RUNNER_EXTRA_LABELS
+                Value: !Ref RunnerExtraLabels
+              - !Ref "AWS::NoValue"
           Secrets:
             - Name: GITHUB_APP_PRIVATE_KEY
               ValueFrom: !Ref GitHubAppPrivateKeyArn
@@ -255,7 +271,7 @@ Resources:
         MaximumPercent: 100
         MinimumHealthyPercent: 0
 
-  # --- Runner Task Definitions ---
+  # --- Runner Task Definitions (x86_64) ---
   RunnerSmallTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -265,6 +281,9 @@ Resources:
       NetworkMode: !If [UseExternal, bridge, awsvpc]
       RequiresCompatibilities:
         - !If [UseManagedInstances, EC2, !If [UseFargateSpot, FARGATE, EXTERNAL]]
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
       ContainerDefinitions:
@@ -295,6 +314,9 @@ Resources:
       NetworkMode: !If [UseExternal, bridge, awsvpc]
       RequiresCompatibilities:
         - !If [UseManagedInstances, EC2, !If [UseFargateSpot, FARGATE, EXTERNAL]]
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
       ContainerDefinitions:
@@ -325,6 +347,9 @@ Resources:
       NetworkMode: !If [UseExternal, bridge, awsvpc]
       RequiresCompatibilities:
         - !If [UseManagedInstances, EC2, !If [UseFargateSpot, FARGATE, EXTERNAL]]
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
       ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
       TaskRoleArn: !GetAtt RunnerTaskRole.Arn
       ContainerDefinitions:
@@ -338,6 +363,106 @@ Resources:
               awslogs-group: !Ref RunnerLogGroup
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: runner-large
+      Tags:
+        - Key: "ecs-arc:max-runners"
+          Value: "5"
+        - Key: "ecs-arc:min-runners"
+          Value: "0"
+        - Key: "ecs-arc:max-runtime"
+          Value: "6h"
+
+  # --- Runner Task Definitions (ARM64) ---
+  RunnerSmallArm64TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${Environment}-runner-small-arm64"
+      Cpu: "1024"
+      Memory: "2048"
+      NetworkMode: !If [UseExternal, bridge, awsvpc]
+      RequiresCompatibilities:
+        - !If [UseManagedInstances, EC2, !If [UseFargateSpot, FARGATE, EXTERNAL]]
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: ARM64
+      ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
+      TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      ContainerDefinitions:
+        - Name: runner
+          Image: ghcr.io/actions/actions-runner-dind:latest
+          Essential: true
+          Privileged: !If [UseFargateSpot, false, true]
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref RunnerLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: runner-small-arm64
+      Tags:
+        - Key: "ecs-arc:max-runners"
+          Value: "10"
+        - Key: "ecs-arc:min-runners"
+          Value: "0"
+        - Key: "ecs-arc:max-runtime"
+          Value: "6h"
+
+  RunnerMediumArm64TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${Environment}-runner-medium-arm64"
+      Cpu: "2048"
+      Memory: "4096"
+      NetworkMode: !If [UseExternal, bridge, awsvpc]
+      RequiresCompatibilities:
+        - !If [UseManagedInstances, EC2, !If [UseFargateSpot, FARGATE, EXTERNAL]]
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: ARM64
+      ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
+      TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      ContainerDefinitions:
+        - Name: runner
+          Image: ghcr.io/actions/actions-runner-dind:latest
+          Essential: true
+          Privileged: !If [UseFargateSpot, false, true]
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref RunnerLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: runner-medium-arm64
+      Tags:
+        - Key: "ecs-arc:max-runners"
+          Value: "10"
+        - Key: "ecs-arc:min-runners"
+          Value: "0"
+        - Key: "ecs-arc:max-runtime"
+          Value: "6h"
+
+  RunnerLargeArm64TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${Environment}-runner-large-arm64"
+      Cpu: "4096"
+      Memory: "8192"
+      NetworkMode: !If [UseExternal, bridge, awsvpc]
+      RequiresCompatibilities:
+        - !If [UseManagedInstances, EC2, !If [UseFargateSpot, FARGATE, EXTERNAL]]
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: ARM64
+      ExecutionRoleArn: !GetAtt RunnerExecutionRole.Arn
+      TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      ContainerDefinitions:
+        - Name: runner
+          Image: ghcr.io/actions/actions-runner-dind:latest
+          Essential: true
+          Privileged: !If [UseFargateSpot, false, true]
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref RunnerLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: runner-large-arm64
       Tags:
         - Key: "ecs-arc:max-runners"
           Value: "5"
@@ -364,3 +489,12 @@ Outputs:
 
   RunnerLargeTaskDefinition:
     Value: !Ref RunnerLargeTaskDefinition
+
+  RunnerSmallArm64TaskDefinition:
+    Value: !Ref RunnerSmallArm64TaskDefinition
+
+  RunnerMediumArm64TaskDefinition:
+    Value: !Ref RunnerMediumArm64TaskDefinition
+
+  RunnerLargeArm64TaskDefinition:
+    Value: !Ref RunnerLargeArm64TaskDefinition
