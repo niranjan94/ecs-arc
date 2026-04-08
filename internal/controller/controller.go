@@ -135,7 +135,11 @@ func (c *Controller) runScaleSet(
 	if err != nil {
 		return fmt.Errorf("failed to create message session: %w", err)
 	}
-	defer sessionClient.Close(context.WithoutCancel(ctx))
+	defer func() {
+		if err := sessionClient.Close(context.WithoutCancel(ctx)); err != nil {
+			logger.Error("failed to close session client", "error", err)
+		}
+	}()
 
 	l, err := listener.New(sessionClient, listener.Config{
 		ScaleSetID: scaleSet.ID,
