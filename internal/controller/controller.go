@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/actions/scaleset"
 	"github.com/actions/scaleset/listener"
@@ -154,6 +155,14 @@ func (c *Controller) runScaleSet(
 		info.Config,
 		logger.WithGroup("scaler"),
 	)
+
+	// Start stale runner reaper
+	reaper := runner.NewReaper(
+		c.ecsClient, c.cfg.ECSCluster, scaleSetName,
+		info.Config.MaxRuntime, 5*time.Minute,
+		logger.WithGroup("reaper"),
+	)
+	go reaper.Run(ctx, 30*time.Second)
 
 	logger.Info("starting listener",
 		slog.Int("max_runners", info.Config.MaxRunners),
