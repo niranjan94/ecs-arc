@@ -360,10 +360,12 @@ Resources:
             Image: ghcr.io/actions/actions-runner:latest
             Essential: false
             User: "0"
-            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            Command: ["sh", "-c", "cp -a /home/runner/externals/. /home/runner/tmpDir/ && chown -R 1001:123 /home/runner/tmpDir /home/runner/_work"]
             MountPoints:
               - SourceVolume: dind-externals
                 ContainerPath: /home/runner/tmpDir
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
             LogConfiguration:
               LogDriver: awslogs
               Options:
@@ -462,10 +464,12 @@ Resources:
             Image: ghcr.io/actions/actions-runner:latest
             Essential: false
             User: "0"
-            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            Command: ["sh", "-c", "cp -a /home/runner/externals/. /home/runner/tmpDir/ && chown -R 1001:123 /home/runner/tmpDir /home/runner/_work"]
             MountPoints:
               - SourceVolume: dind-externals
                 ContainerPath: /home/runner/tmpDir
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
             LogConfiguration:
               LogDriver: awslogs
               Options:
@@ -564,10 +568,12 @@ Resources:
             Image: ghcr.io/actions/actions-runner:latest
             Essential: false
             User: "0"
-            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            Command: ["sh", "-c", "cp -a /home/runner/externals/. /home/runner/tmpDir/ && chown -R 1001:123 /home/runner/tmpDir /home/runner/_work"]
             MountPoints:
               - SourceVolume: dind-externals
                 ContainerPath: /home/runner/tmpDir
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
             LogConfiguration:
               LogDriver: awslogs
               Options:
@@ -668,10 +674,12 @@ Resources:
             Image: ghcr.io/actions/actions-runner:latest
             Essential: false
             User: "0"
-            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            Command: ["sh", "-c", "cp -a /home/runner/externals/. /home/runner/tmpDir/ && chown -R 1001:123 /home/runner/tmpDir /home/runner/_work"]
             MountPoints:
               - SourceVolume: dind-externals
                 ContainerPath: /home/runner/tmpDir
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
             LogConfiguration:
               LogDriver: awslogs
               Options:
@@ -771,10 +779,12 @@ Resources:
             Image: ghcr.io/actions/actions-runner:latest
             Essential: false
             User: "0"
-            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            Command: ["sh", "-c", "cp -a /home/runner/externals/. /home/runner/tmpDir/ && chown -R 1001:123 /home/runner/tmpDir /home/runner/_work"]
             MountPoints:
               - SourceVolume: dind-externals
                 ContainerPath: /home/runner/tmpDir
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
             LogConfiguration:
               LogDriver: awslogs
               Options:
@@ -874,10 +884,12 @@ Resources:
             Image: ghcr.io/actions/actions-runner:latest
             Essential: false
             User: "0"
-            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            Command: ["sh", "-c", "cp -a /home/runner/externals/. /home/runner/tmpDir/ && chown -R 1001:123 /home/runner/tmpDir /home/runner/_work"]
             MountPoints:
               - SourceVolume: dind-externals
                 ContainerPath: /home/runner/tmpDir
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
             LogConfiguration:
               LogDriver: awslogs
               Options:
@@ -978,10 +990,12 @@ Resources:
             Image: ghcr.io/actions/actions-runner:latest
             Essential: false
             User: "0"
-            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            Command: ["sh", "-c", "cp -a /home/runner/externals/. /home/runner/tmpDir/ && chown -R 1001:123 /home/runner/tmpDir /home/runner/_work"]
             MountPoints:
               - SourceVolume: dind-externals
                 ContainerPath: /home/runner/tmpDir
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
             LogConfiguration:
               LogDriver: awslogs
               Options:
@@ -1081,10 +1095,12 @@ Resources:
             Image: ghcr.io/actions/actions-runner:latest
             Essential: false
             User: "0"
-            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            Command: ["sh", "-c", "cp -a /home/runner/externals/. /home/runner/tmpDir/ && chown -R 1001:123 /home/runner/tmpDir /home/runner/_work"]
             MountPoints:
               - SourceVolume: dind-externals
                 ContainerPath: /home/runner/tmpDir
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
             LogConfiguration:
               LogDriver: awslogs
               Options:
@@ -1184,10 +1200,12 @@ Resources:
             Image: ghcr.io/actions/actions-runner:latest
             Essential: false
             User: "0"
-            Command: ["cp", "-a", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+            Command: ["sh", "-c", "cp -a /home/runner/externals/. /home/runner/tmpDir/ && chown -R 1001:123 /home/runner/tmpDir /home/runner/_work"]
             MountPoints:
               - SourceVolume: dind-externals
                 ContainerPath: /home/runner/tmpDir
+              - SourceVolume: work
+                ContainerPath: /home/runner/_work
             LogConfiguration:
               LogDriver: awslogs
               Options:
