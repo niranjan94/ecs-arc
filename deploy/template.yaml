@@ -203,6 +203,7 @@ Resources:
                   - ecs:StopTask
                   - ecs:DescribeTasks
                   - ecs:ListTasks
+                  - ecs:TagResource
                 Resource: "*"
                 Condition:
                   ArnEquals:

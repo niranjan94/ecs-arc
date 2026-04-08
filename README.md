@@ -98,7 +98,7 @@ The CloudFormation template creates all required IAM roles automatically. If you
 
 ### Controller Task Role
 
-The controller needs to manage ECS runner tasks and describe task definitions. Cluster-scoped actions are restricted to the target cluster; `DescribeTaskDefinition` is account-global and cannot be cluster-scoped.
+The controller needs to manage ECS runner tasks and describe task definitions. `ecs:TagResource` is required because `RunTask` applies tags (`ecs-arc:scale-set`, `ecs-arc:runner-name`) and propagates task definition tags to each task. Cluster-scoped actions are restricted to the target cluster; `DescribeTaskDefinition` is account-global and cannot be cluster-scoped.
 
 ```json
 {
@@ -111,7 +111,8 @@ The controller needs to manage ECS runner tasks and describe task definitions. C
         "ecs:RunTask",
         "ecs:StopTask",
         "ecs:DescribeTasks",
-        "ecs:ListTasks"
+        "ecs:ListTasks",
+        "ecs:TagResource"
       ],
       "Resource": "*",
       "Condition": {
