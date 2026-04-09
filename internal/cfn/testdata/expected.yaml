@@ -344,7 +344,7 @@ Resources:
         MaximumPercent: 100
         MinimumHealthyPercent: 0
 
-  # --- Runner Task Definitions (arch-unspecified) ---
+  # --- Runner Task Definitions ---
   RunnerSmallTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -657,7 +657,6 @@ Resources:
         - Key: "ecs-arc:max-runtime"
           Value: "6h"
 
-  # --- Runner Task Definitions (X86_64) ---
   RunnerSmallX64TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -973,7 +972,6 @@ Resources:
         - Key: "ecs-arc:max-runtime"
           Value: "6h"
 
-  # --- Runner Task Definitions (ARM64) ---
   RunnerSmallArm64TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:

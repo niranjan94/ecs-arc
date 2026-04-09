@@ -25,4 +25,4 @@ go.work.sum
 # env file
 .env
 docs/superpowers/
-
+internal/cfn/testdata/actual.yaml
