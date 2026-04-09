@@ -20,13 +20,19 @@ aws secretsmanager create-secret \
   --secret-string file://private-key.pem
 ```
 
-2. Deploy the CloudFormation template.
+2. Obtain the CloudFormation template. Download the latest `template.yaml` from the [releases page](https://github.com/niranjan94/ecs-arc/releases), or generate it locally:
+
+```bash
+go run ./cmd/ecs-arc generate-template -o template.yaml
+```
+
+3. Deploy the CloudFormation template.
 
 **ECS Anywhere (EXTERNAL)** -- no VPC/subnets/security groups needed:
 
 ```bash
 aws cloudformation deploy \
-  --template-file deploy/template.yaml \
+  --template-file template.yaml \
   --stack-name ecs-arc \
   --parameter-overrides \
     EcsLaunchType=EXTERNAL \
@@ -42,7 +48,7 @@ aws cloudformation deploy \
 
 ```bash
 aws cloudformation deploy \
-  --template-file deploy/template.yaml \
+  --template-file template.yaml \
   --stack-name ecs-arc \
   --parameter-overrides \
     GitHubAppClientId=Iv1.abc123 \
@@ -54,7 +60,7 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
-3. Target runners in your workflows:
+4. Target runners in your workflows:
 
 ```yaml
 jobs:
@@ -206,7 +212,7 @@ Without a prefix, the task definition family name is used directly as the label.
 ### Building
 
 ```bash
-go build ./cmd/controller
+go build ./cmd/ecs-arc
 ```
 
 ### Running Locally
@@ -223,7 +229,7 @@ export TASK_DEFINITIONS=runner-small
 export ECS_SUBNETS=subnet-aaa
 export ECS_SECURITY_GROUPS=sg-xxx
 
-go run ./cmd/controller
+go run ./cmd/ecs-arc controller
 ```
 
 ### Testing
