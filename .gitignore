@@ -24,6 +24,7 @@ go.work.sum
 
 # env file
 .env
+/ecs-arc
 deploy/template.yaml
 docs/superpowers/
 internal/cfn/testdata/actual.yaml
