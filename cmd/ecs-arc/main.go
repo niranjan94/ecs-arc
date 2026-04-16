@@ -1,7 +1,6 @@
-// Package main is the entrypoint for the ecs-arc multi-command binary.
-// It exposes two subcommands: "controller" runs the long-running autoscaler
-// service, and "generate-template" renders the CloudFormation template used
-// to deploy ecs-arc.
+// Package main is the entrypoint for the ecs-arc binary.
+// It exposes the "controller" subcommand which runs the long-running
+// autoscaler service.
 package main
 
 import (
@@ -14,9 +13,7 @@ import (
 var rootCmd = &cobra.Command{
 	Use:   "ecs-arc",
 	Short: "ECS Actions Runner Controller",
-	Long: "ecs-arc autoscales GitHub Actions self-hosted runners as ECS tasks. " +
-		"Use the 'controller' subcommand to run the service, or 'generate-template' " +
-		"to produce the CloudFormation template used to deploy it.",
+	Long: "ecs-arc autoscales GitHub Actions self-hosted runners as ECS tasks.",
 	SilenceUsage: true,
 }
 
