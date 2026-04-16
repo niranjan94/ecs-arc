@@ -15,44 +15,36 @@ import (
 	"github.com/actions/scaleset"
 	"github.com/actions/scaleset/listener"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	ecsTypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"github.com/niranjan94/ecs-arc/internal/config"
+	"github.com/niranjan94/ecs-arc/internal/reconciler"
 	"github.com/niranjan94/ecs-arc/internal/runner"
 	scalerPkg "github.com/niranjan94/ecs-arc/internal/scaler"
 	"github.com/niranjan94/ecs-arc/internal/taskdef"
+	"github.com/niranjan94/ecs-arc/internal/tomlcfg"
 )
 
 // Controller manages the lifecycle of all scale set goroutines.
 type Controller struct {
 	cfg       *config.Config
 	ecsClient *ecs.Client
+	ssmClient reconciler.SSMClient
 	logger    *slog.Logger
 }
 
 // New creates a new Controller.
-func New(cfg *config.Config, ecsClient *ecs.Client, logger *slog.Logger) *Controller {
+func New(cfg *config.Config, ecsClient *ecs.Client, ssmClient reconciler.SSMClient, logger *slog.Logger) *Controller {
 	return &Controller{
 		cfg:       cfg,
 		ecsClient: ecsClient,
+		ssmClient: ssmClient,
 		logger:    logger,
 	}
 }
 
-// Run starts all scale set goroutines and blocks until the context is cancelled.
-// On cancellation, it cleans up scale set registrations.
+// Run starts the reconciler and event-driven scale set management loop.
+// It blocks until the context is cancelled.
 func (c *Controller) Run(ctx context.Context) error {
-	describer := taskdef.NewECSTaskDefDescriber(c.ecsClient)
-	defaults := taskdef.Defaults{
-		Subnets:          c.cfg.ECSSubnets,
-		SecurityGroups:   c.cfg.ECSSecurityGroups,
-		CapacityProvider: c.cfg.ECSCapacityProvider,
-		ExtraLabels:      c.cfg.RunnerExtraLabels,
-	}
-
-	taskDefs, err := taskdef.LoadAll(ctx, describer, c.cfg.TaskDefinitions, defaults)
-	if err != nil {
-		return fmt.Errorf("failed to load task definitions: %w", err)
-	}
-
 	scalesetClient, err := scaleset.NewClientWithGitHubApp(scaleset.ClientWithGitHubAppConfig{
 		GitHubConfigURL: c.cfg.GitHubConfigURL,
 		GitHubAppAuth: scaleset.GitHubAppAuth{
@@ -71,33 +63,70 @@ func (c *Controller) Run(ctx context.Context) error {
 
 	ecsRunner := runner.NewECSRunner(c.ecsClient, c.cfg.ECSCluster, c.logger)
 
+	infra := reconciler.InfraConfig{
+		ExecutionRoleARN: c.cfg.RunnerExecutionRoleARN,
+		TaskRoleARN:      c.cfg.RunnerTaskRoleARN,
+		LogGroup:         c.cfg.RunnerLogGroup,
+		Region:           c.ecsClient.Options().Region,
+	}
+
+	events := make(chan reconciler.ReconcileEvent, 16)
+	rec := reconciler.New(
+		c.ssmClient, c.ecsClient,
+		c.cfg.SSMParameterName, c.cfg.SSMPollInterval,
+		infra, events, c.logger.WithGroup("reconciler"),
+	)
+	go rec.Run(ctx)
+
+	scaleSets := make(map[string]context.CancelFunc)
 	var wg sync.WaitGroup
-	errs := make(chan error, len(c.cfg.TaskDefinitions))
 
-	for _, family := range c.cfg.TaskDefinitions {
-		info := taskDefs[family]
-		scaleSetName := c.cfg.ScaleSetName(family)
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := c.runScaleSet(ctx, scalesetClient, ecsRunner, scaleSetName, family, info); err != nil {
-				c.logger.Error("scale set exited with error",
-					slog.String("scale_set", scaleSetName),
-					slog.String("error", err.Error()),
-				)
-				errs <- fmt.Errorf("scale set %q: %w", scaleSetName, err)
+	for {
+		select {
+		case <-ctx.Done():
+			for _, cancel := range scaleSets {
+				cancel()
 			}
-		}()
+			wg.Wait()
+			return nil
+		case event := <-events:
+			switch event.Kind {
+			case reconciler.EventCreate:
+				ssCfg := toScaleSetConfig(event.Config)
+				info := &taskdef.TaskDefInfo{
+					TaskDefinition: event.TaskDefinition,
+					Config:         ssCfg,
+				}
+				scaleSetName := c.cfg.ScaleSetName(event.Family)
+				ssCtx, cancel := context.WithCancel(ctx)
+				scaleSets[event.Family] = cancel
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					if err := c.runScaleSet(ssCtx, scalesetClient, ecsRunner, scaleSetName, event.Family, info); err != nil {
+						c.logger.Error("scale set exited with error",
+							slog.String("scale_set", scaleSetName),
+							slog.String("error", err.Error()),
+						)
+					}
+				}()
+			case reconciler.EventUpdate:
+				c.logger.Warn("config changed for running scale set, restart required for changes to take effect",
+					slog.String("family", event.Family),
+					slog.String("event", "config_changed"),
+				)
+			case reconciler.EventRemove:
+				if cancel, ok := scaleSets[event.Family]; ok {
+					c.logger.Info("removing scale set",
+						slog.String("family", event.Family),
+						slog.String("event", "scale_set_removed"),
+					)
+					cancel()
+					delete(scaleSets, event.Family)
+				}
+			}
+		}
 	}
-
-	wg.Wait()
-	close(errs)
-
-	for err := range errs {
-		return err
-	}
-	return nil
 }
 
 func (c *Controller) runScaleSet(
@@ -213,4 +242,30 @@ func (c *Controller) runScaleSet(
 	)
 
 	return l.Run(ctx, s)
+}
+
+func toScaleSetConfig(r *tomlcfg.ResolvedRunnerConfig) taskdef.ScaleSetConfig {
+	return taskdef.ScaleSetConfig{
+		MaxRunners:       r.MaxRunners,
+		MinRunners:       r.MinRunners,
+		MaxRuntime:       r.MaxRuntime,
+		Subnets:          r.Subnets,
+		SecurityGroups:   r.SecurityGroups,
+		CapacityProvider: r.CapacityProvider,
+		LaunchType:       mapCompatibilityToLaunchType(r.Compatibility),
+		ExtraLabels:      r.Labels(),
+	}
+}
+
+func mapCompatibilityToLaunchType(compat string) ecsTypes.LaunchType {
+	switch compat {
+	case "FARGATE":
+		return ecsTypes.LaunchTypeFargate
+	case "EC2":
+		return ecsTypes.LaunchTypeEc2
+	case "EXTERNAL":
+		return ecsTypes.LaunchTypeExternal
+	default:
+		return ""
+	}
 }

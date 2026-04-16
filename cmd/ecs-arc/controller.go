@@ -10,6 +10,7 @@ import (
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/niranjan94/ecs-arc/internal/config"
 	"github.com/niranjan94/ecs-arc/internal/controller"
 	"github.com/niranjan94/ecs-arc/internal/logging"
@@ -45,7 +46,7 @@ func runController() error {
 	logger.Info("ecs-arc controller starting",
 		slog.String("org", cfg.GitHubOrg),
 		slog.String("cluster", cfg.ECSCluster),
-		slog.Int("scale_sets", len(cfg.TaskDefinitions)),
+		slog.String("ssm_parameter", cfg.SSMParameterName),
 	)
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
@@ -54,7 +55,8 @@ func runController() error {
 	}
 
 	ecsClient := ecs.NewFromConfig(awsCfg)
-	ctrl := controller.New(cfg, ecsClient, logger)
+	ssmClient := ssm.NewFromConfig(awsCfg)
+	ctrl := controller.New(cfg, ecsClient, ssmClient, logger)
 
 	return ctrl.Run(ctx)
 }
