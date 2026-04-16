@@ -34,23 +34,23 @@ Parameters:
   PrivateSubnetIds:
     Type: String
     Default: ""
-    Description: Private subnet IDs for ECS tasks, comma-separated (required for FARGATE_SPOT and MANAGED_INSTANCES)
+    Description: Private subnet IDs for the controller service, comma-separated (required for FARGATE and FARGATE_SPOT)
 
   ServiceSecurityGroupId:
     Type: String
     Default: ""
-    Description: Security group ID for ECS tasks (required for FARGATE_SPOT and MANAGED_INSTANCES)
+    Description: Security group ID for the controller service (required for FARGATE and FARGATE_SPOT)
 
-  EcsLaunchType:
+  ControllerLaunchType:
     Type: String
     Default: FARGATE_SPOT
-    AllowedValues: [MANAGED_INSTANCES, EXTERNAL, FARGATE_SPOT]
+    AllowedValues: [FARGATE, FARGATE_SPOT, EXTERNAL]
     Description: >-
-      Launch type for the controller service. MANAGED_INSTANCES uses EC2 with a
-      capacity provider. EXTERNAL uses ECS Anywhere. FARGATE_SPOT uses Fargate
-      Spot. Runner task definitions are managed dynamically from the TOML
-      config in SSM Parameter Store; this setting only affects how the
-      controller service itself runs.
+      How the controller service itself runs. FARGATE uses on-demand Fargate.
+      FARGATE_SPOT uses Fargate Spot via a capacity provider strategy (cheaper
+      but may be interrupted). EXTERNAL uses ECS Anywhere. Runner task
+      definitions are managed dynamically from the TOML config in SSM
+      Parameter Store and are independent of this setting.
 
   ExistingClusterName:
     Type: String
@@ -78,9 +78,8 @@ Parameters:
       the TOML runner configuration. The parameter is created by this stack.
 
 Conditions:
-  UseManagedInstances: !Equals [!Ref EcsLaunchType, MANAGED_INSTANCES]
-  UseFargateSpot: !Equals [!Ref EcsLaunchType, FARGATE_SPOT]
-  UseExternal: !Equals [!Ref EcsLaunchType, EXTERNAL]
+  UseFargateSpot: !Equals [!Ref ControllerLaunchType, FARGATE_SPOT]
+  UseExternal: !Equals [!Ref ControllerLaunchType, EXTERNAL]
   CreateCluster: !Equals [!Ref ExistingClusterName, ""]
   HasPrivateSubnets: !Not [!Equals [!Ref PrivateSubnetIds, ""]]
   HasSecurityGroup: !Not [!Equals [!Ref ServiceSecurityGroupId, ""]]
@@ -96,6 +95,9 @@ Resources:
       ClusterSettings:
         - Name: containerInsights
           Value: enabled
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
       Tags:
         - Key: Project
           Value: ecs-arc
@@ -289,7 +291,15 @@ Resources:
         - !Ref ExistingClusterName
       TaskDefinition: !Ref ControllerTaskDefinition
       DesiredCount: 1
-      LaunchType: !If [UseExternal, EXTERNAL, FARGATE]
+      LaunchType: !If
+        - UseFargateSpot
+        - !Ref "AWS::NoValue"
+        - !If [UseExternal, EXTERNAL, FARGATE]
+      CapacityProviderStrategy: !If
+        - UseFargateSpot
+        - - CapacityProvider: FARGATE_SPOT
+            Weight: 1
+        - !Ref "AWS::NoValue"
       NetworkConfiguration: !If
         - UseExternal
         - !Ref "AWS::NoValue"
