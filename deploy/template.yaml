@@ -58,6 +58,14 @@ Parameters:
     Default: 14
     Description: Number of days to retain runner logs in CloudWatch
 
+  SSMParameterName:
+    Type: String
+    Default: "/prod/ecs-arc/runners"
+    AllowedPattern: "^/.+"
+    Description: >-
+      Full SSM Parameter Store parameter name (must start with "/") that holds
+      the TOML runner configuration. The parameter is created by this stack.
+
 Conditions:
   CreateCluster: !Equals [!Ref ExistingClusterName, ""]
   HasPrivateSubnets: !Not [!Equals [!Ref PrivateSubnetIds, ""]]
@@ -97,7 +105,7 @@ Resources:
   SSMParameter:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub "/${Environment}/ecs-arc/runners"
+      Name: !Ref SSMParameterName
       Type: String
       Value: "# Populate this parameter with TOML runner configuration"
       Description: TOML configuration for ecs-arc runner task definitions
@@ -166,7 +174,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - ssm:GetParameter
-                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Environment}/ecs-arc/runners"
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SSMParameterName}"
               - Effect: Allow
                 Action:
                   - iam:PassRole
@@ -234,7 +242,7 @@ Resources:
                 - !Ref EcsCluster
                 - !Ref ExistingClusterName
             - Name: SSM_PARAMETER_NAME
-              Value: !Sub "/${Environment}/ecs-arc/runners"
+              Value: !Ref SSMParameterName
             - Name: RUNNER_EXECUTION_ROLE_ARN
               Value: !GetAtt RunnerExecutionRole.Arn
             - Name: RUNNER_TASK_ROLE_ARN
