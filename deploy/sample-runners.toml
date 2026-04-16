@@ -1,0 +1,58 @@
+# Sample runner configuration for ecs-arc.
+# Store this as an SSM parameter and point the controller at it
+# via the SSM_PARAMETER_NAME environment variable.
+#
+# This example defines 51 runner variants across 5 CPU tiers,
+# multiple memory options, and plain/docker feature sets.
+# Max runners per size is derived from a 48GB RAM ceiling.
+
+[defaults]
+compatibility = "EXTERNAL"
+network_mode = "bridge"
+enable_dind = false
+max_runtime = "6h"
+
+[[template]]
+family_prefix = "runner"
+
+[template.sizes]
+# 1 vCPU                                             # max = floor(48GB / mem)
+small-1g      = { cpu = 1024, memory = 1024,  max_runners = 48 }
+small         = { cpu = 1024, memory = 2048,  max_runners = 24 }
+small-4g      = { cpu = 1024, memory = 4096,  max_runners = 12 }
+small-6g      = { cpu = 1024, memory = 6144,  max_runners = 8 }
+small-8g      = { cpu = 1024, memory = 8192,  max_runners = 6 }
+# 2 vCPU
+medium-2g     = { cpu = 2048, memory = 2048,  max_runners = 24 }
+medium        = { cpu = 2048, memory = 4096,  max_runners = 12 }
+medium-6g     = { cpu = 2048, memory = 6144,  max_runners = 8 }
+medium-8g     = { cpu = 2048, memory = 8192,  max_runners = 6 }
+medium-10g    = { cpu = 2048, memory = 10240, max_runners = 4 }
+medium-16g    = { cpu = 2048, memory = 16384, max_runners = 3 }
+# 4 vCPU
+large-4g      = { cpu = 4096, memory = 4096,  max_runners = 12 }
+large-6g      = { cpu = 4096, memory = 6144,  max_runners = 8 }
+large         = { cpu = 4096, memory = 8192,  max_runners = 6 }
+large-10g     = { cpu = 4096, memory = 10240, max_runners = 4 }
+large-12g     = { cpu = 4096, memory = 12288, max_runners = 4 }
+large-16g     = { cpu = 4096, memory = 16384, max_runners = 3 }
+# 6 vCPU
+xlarge-6g     = { cpu = 6144, memory = 6144,  max_runners = 8 }
+xlarge        = { cpu = 6144, memory = 8192,  max_runners = 6 }
+xlarge-10g    = { cpu = 6144, memory = 10240, max_runners = 4 }
+xlarge-12g    = { cpu = 6144, memory = 12288, max_runners = 4 }
+xlarge-16g    = { cpu = 6144, memory = 16384, max_runners = 3 }
+# 8 vCPU
+xxlarge-8g    = { cpu = 8192, memory = 8192,  max_runners = 6 }
+xxlarge-10g   = { cpu = 8192, memory = 10240, max_runners = 4 }
+xxlarge-12g   = { cpu = 8192, memory = 12288, max_runners = 4 }
+xxlarge       = { cpu = 8192, memory = 16384, max_runners = 3 }
+
+[template.features]
+plain  = {}
+docker = { enable_dind = true }
+
+[template.exclude]
+combinations = [
+    { size = "small-1g", feature = "docker" },
+]
