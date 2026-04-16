@@ -2,6 +2,7 @@ package tomlcfg
 
 import (
 	"testing"
+	"time"
 )
 
 func TestParse_MinimalExplicitRunner(t *testing.T) {
@@ -158,5 +159,262 @@ func TestParse_InvalidTOML(t *testing.T) {
 	_, err := Parse(input)
 	if err == nil {
 		t.Fatal("expected error for invalid TOML")
+	}
+}
+
+func TestResolve_InheritsDefaults(t *testing.T) {
+	input := []byte(`
+[defaults]
+compatibility = "FARGATE"
+subnets = ["subnet-abc"]
+security_groups = ["sg-123"]
+network_mode = "awsvpc"
+max_runners = 20
+min_runners = 2
+max_runtime = "4h"
+enable_dind = false
+
+[[runner]]
+family = "test-runner"
+cpu = 1024
+memory = 2048
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resolved, err := Resolve(cfg)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	r := resolved["test-runner"]
+	if r.Compatibility != "FARGATE" {
+		t.Errorf("Compatibility = %q, want FARGATE", r.Compatibility)
+	}
+	if r.MaxRunners != 20 {
+		t.Errorf("MaxRunners = %d, want 20", r.MaxRunners)
+	}
+	if r.MinRunners != 2 {
+		t.Errorf("MinRunners = %d, want 2", r.MinRunners)
+	}
+	if r.MaxRuntime != 4*time.Hour {
+		t.Errorf("MaxRuntime = %v, want 4h", r.MaxRuntime)
+	}
+	if r.EnableDind != false {
+		t.Errorf("EnableDind = %v, want false", r.EnableDind)
+	}
+	if len(r.Subnets) != 1 || r.Subnets[0] != "subnet-abc" {
+		t.Errorf("Subnets = %v, want [subnet-abc]", r.Subnets)
+	}
+}
+
+func TestResolve_RunnerOverridesDefaults(t *testing.T) {
+	input := []byte(`
+[defaults]
+compatibility = "FARGATE"
+max_runners = 20
+
+[[runner]]
+family = "test-runner"
+cpu = 1024
+memory = 2048
+max_runners = 5
+compatibility = "EC2"
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resolved, err := Resolve(cfg)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	r := resolved["test-runner"]
+	if r.MaxRunners != 5 {
+		t.Errorf("MaxRunners = %d, want 5 (runner override)", r.MaxRunners)
+	}
+	if r.Compatibility != "EC2" {
+		t.Errorf("Compatibility = %q, want EC2 (runner override)", r.Compatibility)
+	}
+}
+
+func TestResolve_HardcodedDefaults(t *testing.T) {
+	input := []byte(`
+[[runner]]
+family = "test-runner"
+cpu = 1024
+memory = 2048
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resolved, err := Resolve(cfg)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	r := resolved["test-runner"]
+	if r.Compatibility != "FARGATE" {
+		t.Errorf("Compatibility = %q, want FARGATE (hardcoded default)", r.Compatibility)
+	}
+	if r.NetworkMode != "awsvpc" {
+		t.Errorf("NetworkMode = %q, want awsvpc (hardcoded default)", r.NetworkMode)
+	}
+	if r.EnableDind != false {
+		t.Errorf("EnableDind = %v, want false (hardcoded default)", r.EnableDind)
+	}
+	if r.MaxRunners != 10 {
+		t.Errorf("MaxRunners = %d, want 10 (hardcoded default)", r.MaxRunners)
+	}
+	if r.MinRunners != 0 {
+		t.Errorf("MinRunners = %d, want 0 (hardcoded default)", r.MinRunners)
+	}
+	if r.MaxRuntime != 6*time.Hour {
+		t.Errorf("MaxRuntime = %v, want 6h (hardcoded default)", r.MaxRuntime)
+	}
+	if r.OS != "LINUX" {
+		t.Errorf("OS = %q, want LINUX (hardcoded default)", r.OS)
+	}
+	if r.RunnerImage != "ghcr.io/actions/actions-runner:latest" {
+		t.Errorf("RunnerImage = %q, want default", r.RunnerImage)
+	}
+	if r.DindImage != "docker:dind" {
+		t.Errorf("DindImage = %q, want docker:dind", r.DindImage)
+	}
+}
+
+func TestResolve_ErrorDuplicateFamily(t *testing.T) {
+	input := []byte(`
+[[runner]]
+family = "dupe"
+cpu = 1024
+memory = 2048
+
+[[runner]]
+family = "dupe"
+cpu = 2048
+memory = 4096
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	_, err = Resolve(cfg)
+	if err == nil {
+		t.Fatal("expected error for duplicate family")
+	}
+}
+
+func TestResolve_ErrorMissingFamily(t *testing.T) {
+	input := []byte(`
+[[runner]]
+cpu = 1024
+memory = 2048
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	_, err = Resolve(cfg)
+	if err == nil {
+		t.Fatal("expected error for missing family")
+	}
+}
+
+func TestResolve_ErrorMissingCPU(t *testing.T) {
+	input := []byte(`
+[[runner]]
+family = "test"
+memory = 2048
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	_, err = Resolve(cfg)
+	if err == nil {
+		t.Fatal("expected error for missing cpu")
+	}
+}
+
+func TestResolve_ErrorMissingMemory(t *testing.T) {
+	input := []byte(`
+[[runner]]
+family = "test"
+cpu = 1024
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	_, err = Resolve(cfg)
+	if err == nil {
+		t.Fatal("expected error for missing memory")
+	}
+}
+
+func TestResolve_ErrorInvalidArchitecture(t *testing.T) {
+	input := []byte(`
+[[runner]]
+family = "test"
+cpu = 1024
+memory = 2048
+architecture = "SPARC"
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	_, err = Resolve(cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid architecture")
+	}
+}
+
+func TestResolve_FargateDindForcesFalse(t *testing.T) {
+	input := []byte(`
+[defaults]
+compatibility = "FARGATE"
+enable_dind = true
+
+[[runner]]
+family = "test"
+cpu = 1024
+memory = 2048
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resolved, err := Resolve(cfg)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved["test"].EnableDind != false {
+		t.Error("EnableDind should be forced false for FARGATE")
+	}
+}
+
+func TestResolve_ExternalForcesBridgeMode(t *testing.T) {
+	input := []byte(`
+[defaults]
+compatibility = "EXTERNAL"
+network_mode = "awsvpc"
+
+[[runner]]
+family = "test"
+cpu = 1024
+memory = 2048
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resolved, err := Resolve(cfg)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved["test"].NetworkMode != "bridge" {
+		t.Errorf("NetworkMode = %q, want bridge (EXTERNAL forces bridge)", resolved["test"].NetworkMode)
 	}
 }
