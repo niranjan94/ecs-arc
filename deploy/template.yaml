@@ -34,12 +34,23 @@ Parameters:
   PrivateSubnetIds:
     Type: String
     Default: ""
-    Description: Private subnet IDs for ECS tasks, comma-separated
+    Description: Private subnet IDs for ECS tasks, comma-separated (required for FARGATE_SPOT and MANAGED_INSTANCES)
 
   ServiceSecurityGroupId:
     Type: String
     Default: ""
-    Description: Security group ID for ECS tasks
+    Description: Security group ID for ECS tasks (required for FARGATE_SPOT and MANAGED_INSTANCES)
+
+  EcsLaunchType:
+    Type: String
+    Default: FARGATE_SPOT
+    AllowedValues: [MANAGED_INSTANCES, EXTERNAL, FARGATE_SPOT]
+    Description: >-
+      Launch type for the controller service. MANAGED_INSTANCES uses EC2 with a
+      capacity provider. EXTERNAL uses ECS Anywhere. FARGATE_SPOT uses Fargate
+      Spot. Runner task definitions are managed dynamically from the TOML
+      config in SSM Parameter Store; this setting only affects how the
+      controller service itself runs.
 
   ExistingClusterName:
     Type: String
@@ -67,6 +78,9 @@ Parameters:
       the TOML runner configuration. The parameter is created by this stack.
 
 Conditions:
+  UseManagedInstances: !Equals [!Ref EcsLaunchType, MANAGED_INSTANCES]
+  UseFargateSpot: !Equals [!Ref EcsLaunchType, FARGATE_SPOT]
+  UseExternal: !Equals [!Ref EcsLaunchType, EXTERNAL]
   CreateCluster: !Equals [!Ref ExistingClusterName, ""]
   HasPrivateSubnets: !Not [!Equals [!Ref PrivateSubnetIds, ""]]
   HasSecurityGroup: !Not [!Equals [!Ref ServiceSecurityGroupId, ""]]
@@ -216,9 +230,9 @@ Resources:
       Family: !Sub "${Environment}-ecs-arc-controller"
       Cpu: "256"
       Memory: "512"
-      NetworkMode: awsvpc
+      NetworkMode: !If [UseExternal, bridge, awsvpc]
       RequiresCompatibilities:
-        - FARGATE
+        - !If [UseExternal, EXTERNAL, FARGATE]
       RuntimePlatform:
         OperatingSystemFamily: LINUX
       ExecutionRoleArn: !GetAtt ControllerExecutionRole.Arn
@@ -275,18 +289,20 @@ Resources:
         - !Ref ExistingClusterName
       TaskDefinition: !Ref ControllerTaskDefinition
       DesiredCount: 1
-      LaunchType: FARGATE
-      NetworkConfiguration:
-        AwsvpcConfiguration:
-          Subnets: !If
-            - HasPrivateSubnets
-            - !Split [",", !Ref PrivateSubnetIds]
-            - !Ref "AWS::NoValue"
-          SecurityGroups: !If
-            - HasSecurityGroup
-            - - !Ref ServiceSecurityGroupId
-            - !Ref "AWS::NoValue"
-          AssignPublicIp: DISABLED
+      LaunchType: !If [UseExternal, EXTERNAL, FARGATE]
+      NetworkConfiguration: !If
+        - UseExternal
+        - !Ref "AWS::NoValue"
+        - AwsvpcConfiguration:
+            Subnets: !If
+              - HasPrivateSubnets
+              - !Split [",", !Ref PrivateSubnetIds]
+              - !Ref "AWS::NoValue"
+            SecurityGroups: !If
+              - HasSecurityGroup
+              - - !Ref ServiceSecurityGroupId
+              - !Ref "AWS::NoValue"
+            AssignPublicIp: DISABLED
       DeploymentConfiguration:
         MaximumPercent: 100
         MinimumHealthyPercent: 0
