@@ -376,6 +376,76 @@ func TestReconciler_StartupOrphanCleanup(t *testing.T) {
 	}
 }
 
+// --- Integration test ---
+
+func TestIntegration_FullPipeline(t *testing.T) {
+	// TOML with template (2 sizes x 2 features - 1 exclude = 3) + 1 explicit = 4 runners
+	tomlData := `
+[defaults]
+compatibility = "EXTERNAL"
+network_mode = "bridge"
+enable_dind = false
+max_runtime = "6h"
+
+[[template]]
+family_prefix = "runner"
+
+[template.sizes]
+small = { cpu = 1024, memory = 2048, max_runners = 24 }
+large = { cpu = 4096, memory = 8192, max_runners = 6 }
+
+[template.features]
+plain = {}
+docker = { enable_dind = true }
+
+[template.exclude]
+combinations = [
+    { size = "small", feature = "docker" },
+]
+
+[[runner]]
+family = "custom"
+cpu = 8192
+memory = 16384
+`
+
+	mockSSM := &mockSSMClient{paramValue: tomlData, paramVersion: 1}
+	mockECS := newMockECSRegistrar()
+	mockECS.describeErr = fmt.Errorf("not found")
+
+	events := make(chan ReconcileEvent, 16)
+	infra := InfraConfig{
+		ExecutionRoleARN: "arn:exec",
+		TaskRoleARN:      "arn:task",
+		LogGroup:         "/ecs/runners",
+		Region:           "us-east-1",
+	}
+
+	rec := New(mockSSM, mockECS, "/param", 5*time.Minute, infra, events, slog.Default())
+
+	ctx := context.Background()
+	rec.reconcileStartup(ctx)
+
+	close(events)
+	var created []string
+	for e := range events {
+		if e.Kind != EventCreate {
+			t.Errorf("unexpected event kind %d for family %q", e.Kind, e.Family)
+		}
+		created = append(created, e.Family)
+	}
+
+	// Should have 4 families
+	if len(created) != 4 {
+		t.Fatalf("created %d families, want 4: %v", len(created), created)
+	}
+
+	// Verify RegisterTaskDefinition was called 4 times
+	if mockECS.registerCalled != 4 {
+		t.Errorf("RegisterTaskDefinition called %d times, want 4", mockECS.registerCalled)
+	}
+}
+
 // --- Family-aware mock for complex startup scenarios ---
 
 type describeResult struct {
