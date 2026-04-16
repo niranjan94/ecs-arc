@@ -571,6 +571,418 @@ func TestLabels_Empty(t *testing.T) {
 	}
 }
 
+func TestExpandTemplates_AllThreeDimensions(t *testing.T) {
+	input := []byte(`
+[[template]]
+family_prefix = "runner"
+
+[template.sizes]
+small = { cpu = 1024, memory = 2048 }
+large = { cpu = 4096, memory = 8192 }
+
+[template.architectures]
+x64 = { architecture = "X86_64" }
+arm64 = { architecture = "ARM64" }
+
+[template.features]
+plain = {}
+docker = { enable_dind = true }
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	expanded, err := ExpandTemplates(cfg)
+	if err != nil {
+		t.Fatalf("ExpandTemplates: %v", err)
+	}
+	// 2 sizes x 2 archs x 2 features = 8
+	if len(expanded) != 8 {
+		t.Fatalf("len(expanded) = %d, want 8", len(expanded))
+	}
+
+	families := make(map[string]bool)
+	for _, r := range expanded {
+		families[r.Family] = true
+	}
+	expected := []string{
+		"runner-large-arm64-docker",
+		"runner-large-arm64-plain",
+		"runner-large-x64-docker",
+		"runner-large-x64-plain",
+		"runner-small-arm64-docker",
+		"runner-small-arm64-plain",
+		"runner-small-x64-docker",
+		"runner-small-x64-plain",
+	}
+	for _, f := range expected {
+		if !families[f] {
+			t.Errorf("missing family %q", f)
+		}
+	}
+}
+
+func TestExpandTemplates_WithExclude(t *testing.T) {
+	input := []byte(`
+[[template]]
+family_prefix = "runner"
+
+[template.sizes]
+small = { cpu = 1024, memory = 2048 }
+large = { cpu = 4096, memory = 8192 }
+
+[template.features]
+plain = {}
+docker = { enable_dind = true }
+
+[template.exclude]
+combinations = [
+    { size = "small", feature = "docker" },
+]
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	expanded, err := ExpandTemplates(cfg)
+	if err != nil {
+		t.Fatalf("ExpandTemplates: %v", err)
+	}
+	// 2 sizes x 2 features - 1 exclude = 3
+	if len(expanded) != 3 {
+		t.Fatalf("len(expanded) = %d, want 3", len(expanded))
+	}
+	for _, r := range expanded {
+		if r.Family == "runner-small-docker" {
+			t.Error("excluded combination runner-small-docker should not be present")
+		}
+	}
+}
+
+func TestExpandTemplates_SizesOnly(t *testing.T) {
+	input := []byte(`
+[[template]]
+family_prefix = "runner"
+
+[template.sizes]
+small = { cpu = 1024, memory = 2048 }
+large = { cpu = 4096, memory = 8192 }
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	expanded, err := ExpandTemplates(cfg)
+	if err != nil {
+		t.Fatalf("ExpandTemplates: %v", err)
+	}
+	if len(expanded) != 2 {
+		t.Fatalf("len(expanded) = %d, want 2", len(expanded))
+	}
+	families := make(map[string]bool)
+	for _, r := range expanded {
+		families[r.Family] = true
+	}
+	if !families["runner-large"] {
+		t.Error("missing family runner-large")
+	}
+	if !families["runner-small"] {
+		t.Error("missing family runner-small")
+	}
+}
+
+func TestExpandTemplates_TwoDimensions(t *testing.T) {
+	input := []byte(`
+[[template]]
+family_prefix = "runner"
+
+[template.sizes]
+small = { cpu = 1024, memory = 2048 }
+
+[template.features]
+plain = {}
+docker = { enable_dind = true }
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	expanded, err := ExpandTemplates(cfg)
+	if err != nil {
+		t.Fatalf("ExpandTemplates: %v", err)
+	}
+	// 1 size x 2 features = 2
+	if len(expanded) != 2 {
+		t.Fatalf("len(expanded) = %d, want 2", len(expanded))
+	}
+	families := make(map[string]bool)
+	for _, r := range expanded {
+		families[r.Family] = true
+	}
+	if !families["runner-small-docker"] {
+		t.Error("missing runner-small-docker")
+	}
+	if !families["runner-small-plain"] {
+		t.Error("missing runner-small-plain")
+	}
+}
+
+func TestExpandTemplates_DimensionMergeOrder(t *testing.T) {
+	// features override architectures override sizes
+	input := []byte(`
+[[template]]
+family_prefix = "runner"
+
+[template.sizes]
+small = { cpu = 1024, memory = 2048, max_runners = 10 }
+
+[template.features]
+custom = { max_runners = 5 }
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	expanded, err := ExpandTemplates(cfg)
+	if err != nil {
+		t.Fatalf("ExpandTemplates: %v", err)
+	}
+	if len(expanded) != 1 {
+		t.Fatalf("len(expanded) = %d, want 1", len(expanded))
+	}
+	r := expanded[0]
+	if r.MaxRunners == nil || *r.MaxRunners != 5 {
+		t.Errorf("MaxRunners = %v, want ptr(5) (feature overrides size)", r.MaxRunners)
+	}
+}
+
+func TestExpandTemplates_DimensionLabels(t *testing.T) {
+	input := []byte(`
+[[template]]
+family_prefix = "runner"
+
+[template.sizes]
+small = { cpu = 1024, memory = 2048 }
+
+[template.architectures]
+arm64 = { architecture = "ARM64" }
+
+[template.features]
+docker = { enable_dind = true }
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	expanded, err := ExpandTemplates(cfg)
+	if err != nil {
+		t.Fatalf("ExpandTemplates: %v", err)
+	}
+	if len(expanded) != 1 {
+		t.Fatalf("len(expanded) = %d, want 1", len(expanded))
+	}
+	r := expanded[0]
+	want := []string{"small", "arm64", "docker"}
+	if len(r.DimensionLabels) != len(want) {
+		t.Fatalf("DimensionLabels = %v, want %v", r.DimensionLabels, want)
+	}
+	for i, l := range r.DimensionLabels {
+		if l != want[i] {
+			t.Errorf("DimensionLabels[%d] = %q, want %q", i, l, want[i])
+		}
+	}
+}
+
+func TestExpandTemplates_ErrorNoFamilyPrefix(t *testing.T) {
+	input := []byte(`
+[[template]]
+[template.sizes]
+small = { cpu = 1024, memory = 2048 }
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	_, err = ExpandTemplates(cfg)
+	if err == nil {
+		t.Fatal("expected error for missing family_prefix")
+	}
+}
+
+func TestExpandTemplates_ErrorNoDimensions(t *testing.T) {
+	input := []byte(`
+[[template]]
+family_prefix = "runner"
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	_, err = ExpandTemplates(cfg)
+	if err == nil {
+		t.Fatal("expected error for no dimensions")
+	}
+}
+
+func TestExpandTemplates_NoTemplates(t *testing.T) {
+	input := []byte(`
+[[runner]]
+family = "test"
+cpu = 1024
+memory = 2048
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	expanded, err := ExpandTemplates(cfg)
+	if err != nil {
+		t.Fatalf("ExpandTemplates: %v", err)
+	}
+	if len(expanded) != 0 {
+		t.Errorf("len(expanded) = %d, want 0", len(expanded))
+	}
+}
+
+func TestExpandTemplates_ExcludePartialMatch(t *testing.T) {
+	// Exclude with only size specified should match all combos with that size
+	input := []byte(`
+[[template]]
+family_prefix = "runner"
+
+[template.sizes]
+small = { cpu = 1024, memory = 2048 }
+large = { cpu = 4096, memory = 8192 }
+
+[template.features]
+plain = {}
+docker = { enable_dind = true }
+
+[template.exclude]
+combinations = [
+    { size = "small" },
+]
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	expanded, err := ExpandTemplates(cfg)
+	if err != nil {
+		t.Fatalf("ExpandTemplates: %v", err)
+	}
+	// small-plain and small-docker both excluded, leaving large-docker and large-plain
+	if len(expanded) != 2 {
+		t.Fatalf("len(expanded) = %d, want 2", len(expanded))
+	}
+	for _, r := range expanded {
+		if r.Family == "runner-small-plain" || r.Family == "runner-small-docker" {
+			t.Errorf("excluded combination %q should not be present", r.Family)
+		}
+	}
+}
+
+func TestResolve_FullPipelineWithTemplateAndExplicit(t *testing.T) {
+	input := []byte(`
+[defaults]
+compatibility = "EXTERNAL"
+network_mode = "bridge"
+enable_dind = false
+max_runtime = "6h"
+
+[[template]]
+family_prefix = "runner"
+
+[template.sizes]
+small = { cpu = 1024, memory = 2048, max_runners = 24 }
+large = { cpu = 4096, memory = 8192, max_runners = 6 }
+
+[template.features]
+plain = {}
+docker = { enable_dind = true }
+
+[template.exclude]
+combinations = [
+    { size = "small", feature = "docker" },
+]
+
+[[runner]]
+family = "custom-runner"
+cpu = 8192
+memory = 16384
+enable_dind = true
+compatibility = "EC2"
+network_mode = "awsvpc"
+subnets = ["subnet-abc"]
+security_groups = ["sg-123"]
+extra_labels = ["gpu"]
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resolved, err := Resolve(cfg)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	// 3 from template (small-plain, large-docker, large-plain) + 1 explicit = 4
+	if len(resolved) != 4 {
+		t.Fatalf("len(resolved) = %d, want 4", len(resolved))
+	}
+
+	// Check template-expanded runner
+	sp := resolved["runner-small-plain"]
+	if sp == nil {
+		t.Fatal("missing runner-small-plain")
+	}
+	if sp.CPU != 1024 {
+		t.Errorf("runner-small-plain CPU = %d, want 1024", sp.CPU)
+	}
+	if sp.EnableDind != false {
+		t.Error("runner-small-plain EnableDind should be false")
+	}
+	if sp.MaxRunners != 24 {
+		t.Errorf("runner-small-plain MaxRunners = %d, want 24", sp.MaxRunners)
+	}
+	if sp.Compatibility != "EXTERNAL" {
+		t.Errorf("runner-small-plain Compatibility = %q, want EXTERNAL", sp.Compatibility)
+	}
+	if sp.NetworkMode != "bridge" {
+		t.Errorf("runner-small-plain NetworkMode = %q, want bridge (EXTERNAL forces bridge)", sp.NetworkMode)
+	}
+
+	// Check labels on template runner
+	labels := sp.Labels()
+	if !contains(labels, "small") {
+		t.Errorf("runner-small-plain labels %v missing dimension label 'small'", labels)
+	}
+	if !contains(labels, "plain") {
+		t.Errorf("runner-small-plain labels %v missing dimension label 'plain'", labels)
+	}
+	if !contains(labels, "no-docker") {
+		t.Errorf("runner-small-plain labels %v missing auto label 'no-docker'", labels)
+	}
+
+	// Check explicit runner
+	cr := resolved["custom-runner"]
+	if cr == nil {
+		t.Fatal("missing custom-runner")
+	}
+	if cr.CPU != 8192 {
+		t.Errorf("custom-runner CPU = %d, want 8192", cr.CPU)
+	}
+	if cr.EnableDind != true {
+		t.Error("custom-runner EnableDind should be true")
+	}
+	if cr.Compatibility != "EC2" {
+		t.Errorf("custom-runner Compatibility = %q, want EC2", cr.Compatibility)
+	}
+	if !contains(cr.Labels(), "gpu") {
+		t.Errorf("custom-runner labels %v missing 'gpu'", cr.Labels())
+	}
+}
+
 func contains(haystack []string, needle string) bool {
 	for _, s := range haystack {
 		if s == needle {
