@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config holds all configuration for the ecs-arc controller.
@@ -29,15 +30,18 @@ type Config struct {
 
 	// ECSCluster is the ECS cluster name or ARN.
 	ECSCluster string
-	// ECSSubnets is the list of subnet IDs for awsvpc network mode.
-	ECSSubnets []string
-	// ECSSecurityGroups is the list of security group IDs.
-	ECSSecurityGroups []string
-	// ECSCapacityProvider is the optional capacity provider name.
-	ECSCapacityProvider string
 
-	// TaskDefinitions is the list of ECS task definition family names.
-	TaskDefinitions []string
+	// SSMParameterName is the SSM Parameter Store parameter that holds the TOML runner config.
+	SSMParameterName string
+	// SSMPollInterval is how often to poll SSM for config changes.
+	SSMPollInterval time.Duration
+
+	// RunnerExecutionRoleARN is the IAM execution role ARN for runner task definitions.
+	RunnerExecutionRoleARN string
+	// RunnerTaskRoleARN is the IAM task role ARN for runner task definitions.
+	RunnerTaskRoleARN string
+	// RunnerLogGroup is the CloudWatch log group for runner containers.
+	RunnerLogGroup string
 
 	// RunnerExtraLabels are additional GitHub Actions labels to apply to every
 	// runner scale set. Comma-separated list of label names.
@@ -96,21 +100,34 @@ func Load() (*Config, error) {
 		missing = append(missing, "ECS_CLUSTER")
 	}
 
-	if subnets := os.Getenv("ECS_SUBNETS"); subnets != "" {
-		cfg.ECSSubnets = splitCSV(subnets)
+	cfg.SSMParameterName = os.Getenv("SSM_PARAMETER_NAME")
+	if cfg.SSMParameterName == "" {
+		missing = append(missing, "SSM_PARAMETER_NAME")
 	}
 
-	if sgs := os.Getenv("ECS_SECURITY_GROUPS"); sgs != "" {
-		cfg.ECSSecurityGroups = splitCSV(sgs)
-	}
-
-	cfg.ECSCapacityProvider = os.Getenv("ECS_CAPACITY_PROVIDER")
-
-	taskDefs := os.Getenv("TASK_DEFINITIONS")
-	if taskDefs == "" {
-		missing = append(missing, "TASK_DEFINITIONS")
+	if pollStr := os.Getenv("SSM_POLL_INTERVAL"); pollStr != "" {
+		d, err := time.ParseDuration(pollStr)
+		if err != nil {
+			return nil, fmt.Errorf("SSM_POLL_INTERVAL must be a valid duration: %w", err)
+		}
+		cfg.SSMPollInterval = d
 	} else {
-		cfg.TaskDefinitions = splitCSV(taskDefs)
+		cfg.SSMPollInterval = 5 * time.Minute
+	}
+
+	cfg.RunnerExecutionRoleARN = os.Getenv("RUNNER_EXECUTION_ROLE_ARN")
+	if cfg.RunnerExecutionRoleARN == "" {
+		missing = append(missing, "RUNNER_EXECUTION_ROLE_ARN")
+	}
+
+	cfg.RunnerTaskRoleARN = os.Getenv("RUNNER_TASK_ROLE_ARN")
+	if cfg.RunnerTaskRoleARN == "" {
+		missing = append(missing, "RUNNER_TASK_ROLE_ARN")
+	}
+
+	cfg.RunnerLogGroup = os.Getenv("RUNNER_LOG_GROUP")
+	if cfg.RunnerLogGroup == "" {
+		missing = append(missing, "RUNNER_LOG_GROUP")
 	}
 
 	if extraLabels := os.Getenv("RUNNER_EXTRA_LABELS"); extraLabels != "" {
