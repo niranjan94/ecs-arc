@@ -229,6 +229,8 @@ func Resolve(cfg *Config) (map[string]*ResolvedRunnerConfig, error) {
 			resolved.SecurityGroups = nil
 		}
 
+		resolved.AutoLabels = DeriveAutoLabels(resolved)
+
 		results[r.Family] = resolved
 	}
 

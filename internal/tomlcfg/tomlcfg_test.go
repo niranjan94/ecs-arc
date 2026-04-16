@@ -418,3 +418,164 @@ memory = 2048
 		t.Errorf("NetworkMode = %q, want bridge (EXTERNAL forces bridge)", resolved["test"].NetworkMode)
 	}
 }
+
+func TestDeriveAutoLabels_Architecture(t *testing.T) {
+	tests := []struct {
+		arch string
+		want string
+	}{
+		{"X86_64", "x64"},
+		{"ARM64", "arm64"},
+	}
+	for _, tt := range tests {
+		r := &ResolvedRunnerConfig{Architecture: tt.arch, OS: "LINUX", Compatibility: "FARGATE"}
+		labels := DeriveAutoLabels(r)
+		if !contains(labels, tt.want) {
+			t.Errorf("arch %q: labels %v missing %q", tt.arch, labels, tt.want)
+		}
+	}
+}
+
+func TestDeriveAutoLabels_NoArchWhenEmpty(t *testing.T) {
+	r := &ResolvedRunnerConfig{Architecture: "", OS: "LINUX", Compatibility: "FARGATE"}
+	labels := DeriveAutoLabels(r)
+	for _, l := range labels {
+		if l == "x64" || l == "arm64" {
+			t.Errorf("should not have arch label, got %q", l)
+		}
+	}
+}
+
+func TestDeriveAutoLabels_OS(t *testing.T) {
+	r := &ResolvedRunnerConfig{OS: "LINUX", Compatibility: "FARGATE"}
+	labels := DeriveAutoLabels(r)
+	if !contains(labels, "linux") {
+		t.Errorf("labels %v missing linux", labels)
+	}
+}
+
+func TestDeriveAutoLabels_DinD(t *testing.T) {
+	r := &ResolvedRunnerConfig{EnableDind: true, OS: "LINUX", Compatibility: "EC2"}
+	labels := DeriveAutoLabels(r)
+	if !contains(labels, "docker") {
+		t.Errorf("labels %v missing docker", labels)
+	}
+	if contains(labels, "no-docker") {
+		t.Error("should not have no-docker when dind enabled")
+	}
+}
+
+func TestDeriveAutoLabels_NoDinD(t *testing.T) {
+	r := &ResolvedRunnerConfig{EnableDind: false, OS: "LINUX", Compatibility: "FARGATE"}
+	labels := DeriveAutoLabels(r)
+	if !contains(labels, "no-docker") {
+		t.Errorf("labels %v missing no-docker", labels)
+	}
+	if contains(labels, "docker") {
+		t.Error("should not have docker when dind disabled")
+	}
+}
+
+func TestDeriveAutoLabels_Compatibility(t *testing.T) {
+	r := &ResolvedRunnerConfig{OS: "LINUX", Compatibility: "EXTERNAL"}
+	labels := DeriveAutoLabels(r)
+	if !contains(labels, "external") {
+		t.Errorf("labels %v missing external", labels)
+	}
+}
+
+func TestDeriveAutoLabels_CPU(t *testing.T) {
+	tests := []struct {
+		cpu  int
+		want string
+		skip bool
+	}{
+		{1024, "1cpu", false},
+		{2048, "2cpu", false},
+		{4096, "4cpu", false},
+		{512, "", true},
+		{1536, "", true},
+	}
+	for _, tt := range tests {
+		r := &ResolvedRunnerConfig{CPU: tt.cpu, OS: "LINUX", Compatibility: "FARGATE"}
+		labels := DeriveAutoLabels(r)
+		if tt.skip {
+			for _, l := range labels {
+				if l == tt.want || (len(l) > 3 && l[len(l)-3:] == "cpu") {
+					t.Errorf("cpu %d: should not have cpu label, got %q", tt.cpu, l)
+				}
+			}
+		} else {
+			if !contains(labels, tt.want) {
+				t.Errorf("cpu %d: labels %v missing %q", tt.cpu, labels, tt.want)
+			}
+		}
+	}
+}
+
+func TestDeriveAutoLabels_Memory(t *testing.T) {
+	tests := []struct {
+		mem  int
+		want string
+		skip bool
+	}{
+		{1024, "1gb", false},
+		{2048, "2gb", false},
+		{8192, "8gb", false},
+		{1536, "", true},
+	}
+	for _, tt := range tests {
+		r := &ResolvedRunnerConfig{Memory: tt.mem, OS: "LINUX", Compatibility: "FARGATE"}
+		labels := DeriveAutoLabels(r)
+		if tt.skip {
+			for _, l := range labels {
+				if len(l) > 2 && l[len(l)-2:] == "gb" {
+					t.Errorf("mem %d: should not have memory label, got %q", tt.mem, l)
+				}
+			}
+		} else {
+			if !contains(labels, tt.want) {
+				t.Errorf("mem %d: labels %v missing %q", tt.mem, labels, tt.want)
+			}
+		}
+	}
+}
+
+func TestLabels_Deduplication(t *testing.T) {
+	r := &ResolvedRunnerConfig{
+		DimensionLabels: []string{"arm64", "docker"},
+		ExtraLabels:     []string{"custom", "arm64"},
+		AutoLabels:      []string{"arm64", "docker", "linux"},
+	}
+	labels := r.Labels()
+	counts := make(map[string]int)
+	for _, l := range labels {
+		counts[l]++
+	}
+	for label, count := range counts {
+		if count > 1 {
+			t.Errorf("label %q appears %d times, want 1", label, count)
+		}
+	}
+	// Verify order: dimension labels first, then extra, then auto (deduplicated)
+	if len(labels) != 4 { // arm64, docker, custom, linux
+		t.Errorf("len(labels) = %d, want 4; labels = %v", len(labels), labels)
+	}
+}
+
+func TestLabels_Empty(t *testing.T) {
+	r := &ResolvedRunnerConfig{}
+	labels := r.Labels()
+	if len(labels) != 0 {
+		t.Errorf("got %v, want empty", labels)
+	}
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
