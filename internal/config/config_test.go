@@ -152,6 +152,65 @@ func TestLoad_SSMPollIntervalCustom(t *testing.T) {
 	}
 }
 
+func TestLoad_RequiresExactlyOneSource(t *testing.T) {
+	base := map[string]string{
+		"GITHUB_APP_CLIENT_ID":       "id",
+		"GITHUB_APP_INSTALLATION_ID": "1",
+		"GITHUB_APP_PRIVATE_KEY":     "key",
+		"GITHUB_ORG":                 "org",
+		"ECS_CLUSTER":                "cluster",
+		"RUNNER_EXECUTION_ROLE_ARN":  "arn",
+		"RUNNER_TASK_ROLE_ARN":       "arn",
+		"RUNNER_LOG_GROUP":           "lg",
+	}
+	apply := func(t *testing.T, m map[string]string) {
+		for k, v := range base {
+			t.Setenv(k, v)
+		}
+		t.Setenv("SSM_PARAMETER_NAME", "")
+		t.Setenv("TOML_CONFIG_FILE", "")
+		for k, v := range m {
+			t.Setenv(k, v)
+		}
+	}
+
+	t.Run("neither set", func(t *testing.T) {
+		apply(t, nil)
+		if _, err := Load(); err == nil {
+			t.Fatal("expected error when neither source is set")
+		}
+	})
+
+	t.Run("both set", func(t *testing.T) {
+		apply(t, map[string]string{"SSM_PARAMETER_NAME": "a", "TOML_CONFIG_FILE": "/tmp/x.toml"})
+		if _, err := Load(); err == nil {
+			t.Fatal("expected error when both sources are set")
+		}
+	})
+
+	t.Run("ssm only", func(t *testing.T) {
+		apply(t, map[string]string{"SSM_PARAMETER_NAME": "a"})
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.SSMParameterName != "a" || cfg.TOMLConfigFile != "" {
+			t.Fatalf("got SSM=%q File=%q", cfg.SSMParameterName, cfg.TOMLConfigFile)
+		}
+	})
+
+	t.Run("file only", func(t *testing.T) {
+		apply(t, map[string]string{"TOML_CONFIG_FILE": "/tmp/x.toml"})
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.TOMLConfigFile != "/tmp/x.toml" || cfg.SSMParameterName != "" {
+			t.Fatalf("got SSM=%q File=%q", cfg.SSMParameterName, cfg.TOMLConfigFile)
+		}
+	})
+}
+
 func setAllRequired(t *testing.T) {
 	t.Helper()
 	t.Setenv("GITHUB_APP_CLIENT_ID", "Iv1.abc123")

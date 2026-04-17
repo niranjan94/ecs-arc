@@ -33,6 +33,9 @@ type Config struct {
 
 	// SSMParameterName is the SSM Parameter Store parameter that holds the TOML runner config.
 	SSMParameterName string
+	// TOMLConfigFile is a local filesystem path holding the TOML runner config.
+	// Exactly one of TOMLConfigFile or SSMParameterName must be set.
+	TOMLConfigFile string
 	// SSMPollInterval is how often to poll SSM for config changes.
 	SSMPollInterval time.Duration
 
@@ -101,8 +104,12 @@ func Load() (*Config, error) {
 	}
 
 	cfg.SSMParameterName = os.Getenv("SSM_PARAMETER_NAME")
-	if cfg.SSMParameterName == "" {
-		missing = append(missing, "SSM_PARAMETER_NAME")
+	cfg.TOMLConfigFile = os.Getenv("TOML_CONFIG_FILE")
+	switch {
+	case cfg.SSMParameterName != "" && cfg.TOMLConfigFile != "":
+		return nil, fmt.Errorf("set exactly one of SSM_PARAMETER_NAME or TOML_CONFIG_FILE, not both")
+	case cfg.SSMParameterName == "" && cfg.TOMLConfigFile == "":
+		return nil, fmt.Errorf("one of SSM_PARAMETER_NAME or TOML_CONFIG_FILE must be set")
 	}
 
 	if pollStr := os.Getenv("SSM_POLL_INTERVAL"); pollStr != "" {
