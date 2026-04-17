@@ -112,6 +112,39 @@ func TestCleanupOrphanScaleSets_HonoursNamePrefix(t *testing.T) {
 	}
 }
 
+func TestDeleteScaleSetIfManaged_DeletesManaged(t *testing.T) {
+	fake := newFakeScaleSetClient()
+	fake.byName["runner-gone"] = &scaleset.RunnerScaleSet{
+		ID:     42,
+		Name:   "runner-gone",
+		Labels: []scaleset.Label{{Name: ManagedLabelName, Type: "System"}},
+	}
+	c := &Controller{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	c.deleteScaleSetIfManaged(context.Background(), fake, "runner-gone")
+	if len(fake.deleteCalls) != 1 || fake.deleteCalls[0] != 42 {
+		t.Fatalf("expected delete of id=42, got %+v", fake.deleteCalls)
+	}
+}
+
+func TestDeleteScaleSetIfManaged_SkipsUnmanaged(t *testing.T) {
+	fake := newFakeScaleSetClient()
+	fake.byName["foreign"] = &scaleset.RunnerScaleSet{ID: 7, Name: "foreign"}
+	c := &Controller{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	c.deleteScaleSetIfManaged(context.Background(), fake, "foreign")
+	if len(fake.deleteCalls) != 0 {
+		t.Fatalf("expected no deletes, got %+v", fake.deleteCalls)
+	}
+}
+
+func TestDeleteScaleSetIfManaged_MissingIsNoop(t *testing.T) {
+	fake := newFakeScaleSetClient()
+	c := &Controller{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	c.deleteScaleSetIfManaged(context.Background(), fake, "does-not-exist")
+	if len(fake.deleteCalls) != 0 {
+		t.Fatalf("expected no deletes, got %+v", fake.deleteCalls)
+	}
+}
+
 func TestHasManagedLabel(t *testing.T) {
 	cases := []struct {
 		name   string

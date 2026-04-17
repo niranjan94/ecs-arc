@@ -162,6 +162,7 @@ func (c *Controller) Run(ctx context.Context) error {
 					cancel()
 					delete(scaleSets, event.Family)
 				}
+				c.deleteScaleSetIfManaged(ctx, scalesetClient, c.cfg.ScaleSetName(event.Family))
 			}
 		}
 	}
@@ -342,6 +343,48 @@ func (c *Controller) cleanupOrphanScaleSets(
 		slog.Int("failed", failed),
 	)
 	return nil
+}
+
+// deleteScaleSetIfManaged looks up a scale set by name and deletes it only if
+// it carries the ManagedLabelName marker. Missing scale sets, unmanaged scale
+// sets, and transient fetch errors are all no-ops (logged, not returned) so
+// EventRemove handling cannot fail.
+func (c *Controller) deleteScaleSetIfManaged(
+	ctx context.Context,
+	ssClient ScaleSetClient,
+	name string,
+) {
+	ss, err := ssClient.GetRunnerScaleSet(ctx, 1, name)
+	if err != nil {
+		c.logger.Error("lookup for orphan delete failed",
+			slog.String("scale_set", name),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	if ss == nil {
+		return
+	}
+	if !hasManagedLabel(ss.Labels) {
+		c.logger.Warn("scale set present but unmanaged, leaving alone",
+			slog.String("scale_set", name),
+		)
+		return
+	}
+	if err := ssClient.DeleteRunnerScaleSet(ctx, ss.ID); err != nil {
+		c.logger.Error("delete failed",
+			slog.String("scale_set", name),
+			slog.Int("scale_set_id", ss.ID),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	c.logger.Info("deleted managed scale set",
+		slog.String("scale_set", name),
+		slog.Int("scale_set_id", ss.ID),
+		slog.String("event", "scale_set_deleted"),
+		slog.String("reason", "event_remove"),
+	)
 }
 
 func toScaleSetConfig(r *tomlcfg.ResolvedRunnerConfig) taskdef.ScaleSetConfig {
