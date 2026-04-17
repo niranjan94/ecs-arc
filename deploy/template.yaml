@@ -117,15 +117,6 @@ Resources:
       LogGroupName: !Sub "/ecs/${Environment}-ecs-arc/runners"
       RetentionInDays: !Ref RunnerLogGroupRetentionDays
 
-  # --- SSM Parameter Store ---
-  SSMParameter:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Ref SSMParameterName
-      Type: String
-      Value: "# Populate this parameter with TOML runner configuration"
-      Description: TOML configuration for ecs-arc runner task definitions
-
   # --- IAM Roles ---
   ControllerExecutionRole:
     Type: AWS::IAM::Role
@@ -186,6 +177,7 @@ Resources:
                   - ecs:DeregisterTaskDefinition
                   - ecs:DescribeTaskDefinition
                   - ecs:ListTaskDefinitionFamilies
+                  - ecs:TagResource
                 Resource: "*"
               - Effect: Allow
                 Action:
@@ -197,6 +189,9 @@ Resources:
                 Resource:
                   - !GetAtt RunnerExecutionRole.Arn
                   - !GetAtt RunnerTaskRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
 
   RunnerExecutionRole:
     Type: AWS::IAM::Role
@@ -326,7 +321,3 @@ Outputs:
 
   ControllerServiceName:
     Value: !GetAtt ControllerService.Name
-
-  SSMParameterName:
-    Value: !Ref SSMParameter
-    Description: SSM Parameter Store parameter name for runner TOML configuration

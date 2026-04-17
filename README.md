@@ -118,7 +118,7 @@ The CloudFormation template creates all required IAM roles automatically. If you
 
 ### Controller Task Role
 
-The controller manages runner ECS tasks **and** reconciles their task definitions from the TOML in SSM. `ecs:TagResource` lets `RunTask` apply per-task tags (`ecs-arc:scale-set`, `ecs-arc:runner-name`). `ecs:RegisterTaskDefinition`/`DeregisterTaskDefinition`/`ListTaskDefinitionFamilies` are account-global (not cluster-scoped) and are required for the reconciler.
+The controller manages runner ECS tasks **and** reconciles their task definitions from the TOML in SSM. The cluster-scoped `ecs:TagResource` lets `RunTask` apply per-task tags (`ecs-arc:scale-set`, `ecs-arc:runner-name`). `ecs:RegisterTaskDefinition`/`DeregisterTaskDefinition`/`ListTaskDefinitionFamilies` are account-global (not cluster-scoped) and are required for the reconciler; `ecs:TagResource` must also be allowed in that statement so the reconciler can tag task definitions at registration time with `ecs-arc:managed=true` (task definitions have no cluster context, so the cluster-condition form cannot satisfy it).
 
 ```json
 {
@@ -148,7 +148,8 @@ The controller manages runner ECS tasks **and** reconciles their task definition
         "ecs:RegisterTaskDefinition",
         "ecs:DeregisterTaskDefinition",
         "ecs:DescribeTaskDefinition",
-        "ecs:ListTaskDefinitionFamilies"
+        "ecs:ListTaskDefinitionFamilies",
+        "ecs:TagResource"
       ],
       "Resource": "*"
     },
@@ -165,7 +166,12 @@ The controller manages runner ECS tasks **and** reconciles their task definition
       "Resource": [
         "arn:aws:iam::ACCOUNT_ID:role/RUNNER_EXECUTION_ROLE",
         "arn:aws:iam::ACCOUNT_ID:role/RUNNER_TASK_ROLE"
-      ]
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
     }
   ]
 }
@@ -190,6 +196,14 @@ The execution role needs the standard ECS task execution policy plus access to t
 ```
 
 This is in addition to the AWS managed policy `AmazonECSTaskExecutionRolePolicy` which handles ECR image pulls and CloudWatch Logs.
+
+> **CMK-encrypted secrets.** If the GitHub App private-key secret is encrypted with a customer-managed KMS key (anything other than the AWS-managed `aws/secretsmanager` key), the execution role additionally needs `kms:Decrypt` on that CMK. The bundled CloudFormation template does **not** add this grant; either use the AWS-managed key, or extend the execution role yourself with something like:
+>
+> ```json
+> { "Effect": "Allow", "Action": "kms:Decrypt", "Resource": "arn:aws:kms:REGION:ACCOUNT_ID:key/KEY_ID" }
+> ```
+>
+> **SSM SecureString.** The CloudFormation template creates the runner-config SSM parameter as `Type: String`, so no KMS grant is needed to read it. If you switch the parameter to `SecureString` backed by a customer-managed KMS key, the controller task role will also need `kms:Decrypt` on that key.
 
 ### Runner Execution Role
 
