@@ -177,6 +177,7 @@ Resources:
                   - ecs:DeregisterTaskDefinition
                   - ecs:DescribeTaskDefinition
                   - ecs:ListTaskDefinitionFamilies
+                  - ecs:ListTaskDefinitions
                   - ecs:TagResource
                 Resource: "*"
               - Effect: Allow

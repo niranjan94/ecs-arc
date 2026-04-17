@@ -30,6 +30,8 @@ type ECSRegistrar interface {
 		opts ...func(*ecs.Options)) (*ecs.DescribeTaskDefinitionOutput, error)
 	ListTaskDefinitionFamilies(ctx context.Context, input *ecs.ListTaskDefinitionFamiliesInput,
 		opts ...func(*ecs.Options)) (*ecs.ListTaskDefinitionFamiliesOutput, error)
+	ListTaskDefinitions(ctx context.Context, input *ecs.ListTaskDefinitionsInput,
+		opts ...func(*ecs.Options)) (*ecs.ListTaskDefinitionsOutput, error)
 }
 
 // EventKind describes the type of reconciliation event.
@@ -177,6 +179,7 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 	for family := range existingFamilies {
 		if _, exists := newDesired[family]; !exists {
 			r.events <- ReconcileEvent{Kind: EventRemove, Family: family}
+			r.deregisterFamily(ctx, family)
 		}
 	}
 
@@ -275,12 +278,47 @@ func (r *Reconciler) cleanupOrphans(ctx context.Context, desired map[string]*tom
 			if hasManaged(desc.Tags) {
 				r.logger.Info("cleaning up orphaned managed task definition", "family", family)
 				r.events <- ReconcileEvent{Kind: EventRemove, Family: family}
+				r.deregisterFamily(ctx, family)
 			}
 		}
 		if output.NextToken == nil {
 			break
 		}
 		nextToken = output.NextToken
+	}
+}
+
+// deregisterFamily deregisters every ACTIVE revision of the given task definition family.
+// AWS ListTaskDefinitions treats FamilyPrefix as the exact family name, not a substring,
+// so we get only the revisions of this one family. Failures are logged, not returned --
+// orphan cleanup is best-effort.
+func (r *Reconciler) deregisterFamily(ctx context.Context, family string) {
+	var nextToken *string
+	for {
+		out, err := r.ecsClient.ListTaskDefinitions(ctx, &ecs.ListTaskDefinitionsInput{
+			FamilyPrefix: aws.String(family),
+			Status:       ecsTypes.TaskDefinitionStatusActive,
+			NextToken:    nextToken,
+		})
+		if err != nil {
+			r.logger.Error("failed to list task definitions for deregister",
+				"family", family, "error", err.Error())
+			return
+		}
+		for _, arn := range out.TaskDefinitionArns {
+			if _, derr := r.ecsClient.DeregisterTaskDefinition(ctx, &ecs.DeregisterTaskDefinitionInput{
+				TaskDefinition: aws.String(arn),
+			}); derr != nil {
+				r.logger.Error("failed to deregister task definition",
+					"arn", arn, "error", derr.Error())
+				continue
+			}
+			r.logger.Info("deregistered task definition", "arn", arn)
+		}
+		if out.NextToken == nil {
+			return
+		}
+		nextToken = out.NextToken
 	}
 }
 

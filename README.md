@@ -149,6 +149,7 @@ The controller manages runner ECS tasks **and** reconciles their task definition
         "ecs:DeregisterTaskDefinition",
         "ecs:DescribeTaskDefinition",
         "ecs:ListTaskDefinitionFamilies",
+        "ecs:ListTaskDefinitions",
         "ecs:TagResource"
       ],
       "Resource": "*"

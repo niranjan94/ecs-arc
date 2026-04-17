@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,10 +56,12 @@ func (f *fakeSource) Fetch(_ context.Context) ([]byte, string, error) {
 // --- Mock ECS Registrar ---
 
 type mockECSRegistrar struct {
-	registerCalled int
-	describeErr    error
-	describeTags   []ecsTypes.Tag
-	listFamilies   []string
+	registerCalled    int
+	describeErr       error
+	describeTags      []ecsTypes.Tag
+	listFamilies      []string
+	deregisteredARNs  []string
+	revisionsByFamily map[string][]string
 }
 
 func newMockECSRegistrar() *mockECSRegistrar {
@@ -76,8 +79,19 @@ func (m *mockECSRegistrar) RegisterTaskDefinition(_ context.Context, input *ecs.
 	}, nil
 }
 
-func (m *mockECSRegistrar) DeregisterTaskDefinition(_ context.Context, _ *ecs.DeregisterTaskDefinitionInput, _ ...func(*ecs.Options)) (*ecs.DeregisterTaskDefinitionOutput, error) {
+func (m *mockECSRegistrar) DeregisterTaskDefinition(_ context.Context, input *ecs.DeregisterTaskDefinitionInput, _ ...func(*ecs.Options)) (*ecs.DeregisterTaskDefinitionOutput, error) {
+	m.deregisteredARNs = append(m.deregisteredARNs, aws.ToString(input.TaskDefinition))
 	return &ecs.DeregisterTaskDefinitionOutput{}, nil
+}
+
+func (m *mockECSRegistrar) ListTaskDefinitions(_ context.Context, input *ecs.ListTaskDefinitionsInput, _ ...func(*ecs.Options)) (*ecs.ListTaskDefinitionsOutput, error) {
+	fam := aws.ToString(input.FamilyPrefix)
+	if arns, ok := m.revisionsByFamily[fam]; ok {
+		return &ecs.ListTaskDefinitionsOutput{TaskDefinitionArns: arns}, nil
+	}
+	return &ecs.ListTaskDefinitionsOutput{
+		TaskDefinitionArns: []string{fmt.Sprintf("arn:aws:ecs:us-east-1:123:task-definition/%s:1", fam)},
+	}, nil
 }
 
 func (m *mockECSRegistrar) DescribeTaskDefinition(_ context.Context, _ *ecs.DescribeTaskDefinitionInput, _ ...func(*ecs.Options)) (*ecs.DescribeTaskDefinitionOutput, error) {
@@ -389,6 +403,71 @@ func TestReconciler_StartupOrphanCleanup(t *testing.T) {
 	if removeEvents[0].Family != "orphan-runner" {
 		t.Errorf("removed family = %q, want orphan-runner", removeEvents[0].Family)
 	}
+
+	// Orphan task definition revisions must actually be deregistered, not just announced.
+	if len(customECS.deregisteredARNs) == 0 {
+		t.Fatal("expected DeregisterTaskDefinition to be called for orphan-runner, got 0 calls")
+	}
+	for _, arn := range customECS.deregisteredARNs {
+		if !strings.Contains(arn, "orphan-runner") {
+			t.Errorf("unexpected deregister of non-orphan ARN %q", arn)
+		}
+	}
+}
+
+func TestReconciler_DiffRemove_DeregistersTaskDefs(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/runners.toml"
+	write := func(content string) {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`[[runner]]
+family = "alpha"
+cpu = 1024
+memory = 2048
+`)
+
+	events := make(chan ReconcileEvent, 16)
+	mockECS := newMockECSRegistrar()
+	mockECS.describeErr = fmt.Errorf("not found")
+	r := New(
+		NewFileSource(path),
+		mockECS,
+		10*time.Millisecond,
+		InfraConfig{},
+		events,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Run(ctx)
+
+	select {
+	case <-r.StartupDone():
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup did not finish")
+	}
+	drainEvents(events, 200*time.Millisecond)
+
+	// Swap alpha out for beta: alpha should be deregistered.
+	write(`[[runner]]
+family = "beta"
+cpu = 1024
+memory = 2048
+`)
+	drainEvents(events, 500*time.Millisecond)
+
+	var sawAlpha bool
+	for _, arn := range mockECS.deregisteredARNs {
+		if strings.Contains(arn, "alpha") {
+			sawAlpha = true
+		}
+	}
+	if !sawAlpha {
+		t.Fatalf("expected alpha to be deregistered after diff-remove, got %v", mockECS.deregisteredARNs)
+	}
 }
 
 // --- Integration test ---
@@ -469,9 +548,10 @@ type describeResult struct {
 }
 
 type familyAwareMockECS struct {
-	families       map[string]describeResult
-	listFamilies   []string
-	registerCalled int
+	families         map[string]describeResult
+	listFamilies     []string
+	registerCalled   int
+	deregisteredARNs []string
 }
 
 func (m *familyAwareMockECS) RegisterTaskDefinition(_ context.Context, input *ecs.RegisterTaskDefinitionInput, _ ...func(*ecs.Options)) (*ecs.RegisterTaskDefinitionOutput, error) {
@@ -485,8 +565,16 @@ func (m *familyAwareMockECS) RegisterTaskDefinition(_ context.Context, input *ec
 	}, nil
 }
 
-func (m *familyAwareMockECS) DeregisterTaskDefinition(_ context.Context, _ *ecs.DeregisterTaskDefinitionInput, _ ...func(*ecs.Options)) (*ecs.DeregisterTaskDefinitionOutput, error) {
+func (m *familyAwareMockECS) DeregisterTaskDefinition(_ context.Context, input *ecs.DeregisterTaskDefinitionInput, _ ...func(*ecs.Options)) (*ecs.DeregisterTaskDefinitionOutput, error) {
+	m.deregisteredARNs = append(m.deregisteredARNs, aws.ToString(input.TaskDefinition))
 	return &ecs.DeregisterTaskDefinitionOutput{}, nil
+}
+
+func (m *familyAwareMockECS) ListTaskDefinitions(_ context.Context, input *ecs.ListTaskDefinitionsInput, _ ...func(*ecs.Options)) (*ecs.ListTaskDefinitionsOutput, error) {
+	fam := aws.ToString(input.FamilyPrefix)
+	return &ecs.ListTaskDefinitionsOutput{
+		TaskDefinitionArns: []string{fmt.Sprintf("arn:aws:ecs:us-east-1:123:task-definition/%s:1", fam)},
+	}, nil
 }
 
 func (m *familyAwareMockECS) DescribeTaskDefinition(_ context.Context, input *ecs.DescribeTaskDefinitionInput, _ ...func(*ecs.Options)) (*ecs.DescribeTaskDefinitionOutput, error) {
