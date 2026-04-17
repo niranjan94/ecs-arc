@@ -20,7 +20,7 @@ aws secretsmanager create-secret \
   --secret-string file://private-key.pem
 ```
 
-2. Download the latest `template.yaml` from the [releases page](https://github.com/niranjan94/ecs-arc/releases). The template is static -- there is no generator.
+2. Grab [`deploy/template.yaml`](deploy/template.yaml) from this repo (it's a static CloudFormation template -- no generator, no release asset). Pin to a tag if you want a specific version.
 
 3. Deploy the CloudFormation template. The stack creates an empty SSM Parameter (`/prod/ecs-arc/runners` by default) that you will populate in step 4.
 
