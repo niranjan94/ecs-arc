@@ -284,6 +284,66 @@ func (c *Controller) runScaleSet(
 	return l.Run(ctx, s)
 }
 
+// cleanupOrphanScaleSets deletes any ecs-arc-managed scale set in the
+// configured runner group whose name does not correspond to a desired family.
+// Failures are logged; the function always returns nil so startup can proceed.
+func (c *Controller) cleanupOrphanScaleSets(
+	ctx context.Context,
+	ssClient ScaleSetClient,
+	desiredFamilies map[string]struct{},
+) error {
+	expectedNames := make(map[string]struct{}, len(desiredFamilies))
+	for fam := range desiredFamilies {
+		expectedNames[c.cfg.ScaleSetName(fam)] = struct{}{}
+	}
+
+	all, err := ssClient.ListRunnerScaleSets(ctx, 1)
+	if err != nil {
+		c.logger.Error("scale set sweep: list failed",
+			slog.String("error", err.Error()),
+		)
+		return nil
+	}
+
+	var listed, skippedUnmanaged, skippedDesired, deleted, failed int
+	listed = len(all)
+	for _, ss := range all {
+		if !hasManagedLabel(ss.Labels) {
+			skippedUnmanaged++
+			continue
+		}
+		if _, ok := expectedNames[ss.Name]; ok {
+			skippedDesired++
+			continue
+		}
+		if err := ssClient.DeleteRunnerScaleSet(ctx, ss.ID); err != nil {
+			failed++
+			c.logger.Error("scale set sweep: delete failed",
+				slog.String("scale_set", ss.Name),
+				slog.Int("scale_set_id", ss.ID),
+				slog.String("error", err.Error()),
+			)
+			continue
+		}
+		deleted++
+		c.logger.Info("scale set sweep: deleted orphan",
+			slog.String("scale_set", ss.Name),
+			slog.Int("scale_set_id", ss.ID),
+			slog.String("event", "scale_set_deleted"),
+			slog.String("reason", "orphan_startup"),
+		)
+	}
+	c.logger.Info("scale set sweep complete",
+		slog.String("event", "scale_set_sweep_complete"),
+		slog.Int("listed", listed),
+		slog.Int("skipped_unmanaged", skippedUnmanaged),
+		slog.Int("skipped_in_desired", skippedDesired),
+		slog.Int("deleted", deleted),
+		slog.Int("failed", failed),
+	)
+	return nil
+}
+
 func toScaleSetConfig(r *tomlcfg.ResolvedRunnerConfig) taskdef.ScaleSetConfig {
 	return taskdef.ScaleSetConfig{
 		MaxRunners:       r.MaxRunners,

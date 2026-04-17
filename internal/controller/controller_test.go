@@ -1,9 +1,14 @@
 package controller
 
 import (
+	"context"
+	"errors"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/actions/scaleset"
+	"github.com/niranjan94/ecs-arc/internal/config"
 )
 
 func TestInjectManagedLabel_AddsLabelToDesired(t *testing.T) {
@@ -54,6 +59,56 @@ func TestRunScaleSet_CreatePath_InjectsManagedLabel(t *testing.T) {
 	}
 	if !hasManagedLabel(fake.createCalls[0].Labels) {
 		t.Fatalf("create did not include managed label: %+v", fake.createCalls[0].Labels)
+	}
+}
+
+func TestCleanupOrphanScaleSets_DeletesUnmatchedManaged(t *testing.T) {
+	fake := newFakeScaleSetClient()
+	fake.allInGroup = []scaleset.RunnerScaleSet{
+		{ID: 1, Name: "runner-small", Labels: []scaleset.Label{{Name: ManagedLabelName, Type: "System"}}},
+		{ID: 2, Name: "runner-gone", Labels: []scaleset.Label{{Name: ManagedLabelName, Type: "System"}}},
+		{ID: 3, Name: "foreign", Labels: nil},
+	}
+
+	desired := map[string]struct{}{"runner-small": {}}
+	c := &Controller{cfg: &config.Config{}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	if err := c.cleanupOrphanScaleSets(context.Background(), fake, desired); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.deleteCalls) != 1 || fake.deleteCalls[0] != 2 {
+		t.Fatalf("expected DeleteRunnerScaleSet(2), got %+v", fake.deleteCalls)
+	}
+}
+
+func TestCleanupOrphanScaleSets_ListError_NoDeletes(t *testing.T) {
+	fake := newFakeScaleSetClient()
+	fake.listErr = errors.New("boom")
+	c := &Controller{cfg: &config.Config{}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if err := c.cleanupOrphanScaleSets(context.Background(), fake, map[string]struct{}{}); err != nil {
+		t.Fatalf("expected nil (soft fail), got %v", err)
+	}
+	if len(fake.deleteCalls) != 0 {
+		t.Fatalf("expected no deletes, got %+v", fake.deleteCalls)
+	}
+}
+
+func TestCleanupOrphanScaleSets_HonoursNamePrefix(t *testing.T) {
+	fake := newFakeScaleSetClient()
+	fake.allInGroup = []scaleset.RunnerScaleSet{
+		{ID: 10, Name: "prod-runner-small", Labels: []scaleset.Label{{Name: ManagedLabelName, Type: "System"}}},
+		{ID: 11, Name: "prod-runner-old", Labels: []scaleset.Label{{Name: ManagedLabelName, Type: "System"}}},
+	}
+	desired := map[string]struct{}{"runner-small": {}} // family name
+	c := &Controller{
+		cfg:    &config.Config{ScaleSetNamePrefix: "prod"},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	if err := c.cleanupOrphanScaleSets(context.Background(), fake, desired); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.deleteCalls) != 1 || fake.deleteCalls[0] != 11 {
+		t.Fatalf("expected DeleteRunnerScaleSet(11), got %+v", fake.deleteCalls)
 	}
 }
 
