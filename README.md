@@ -91,8 +91,9 @@ The CloudFormation template sets all of these on the controller task. Only set t
 | `GITHUB_APP_PRIVATE_KEY` | Yes | PEM-encoded GitHub App private key |
 | `GITHUB_ORG` | Yes | GitHub organization name |
 | `ECS_CLUSTER` | Yes | ECS cluster name or ARN where runner tasks will be launched |
-| `SSM_PARAMETER_NAME` | Yes | Full SSM parameter name holding the TOML runner config (must start with `/`) |
-| `SSM_POLL_INTERVAL` | No | How often to poll SSM for config changes (default `5m`) |
+| `SSM_PARAMETER_NAME` | One of | Full SSM parameter name holding the TOML runner config (must start with `/`). Mutually exclusive with `TOML_CONFIG_FILE`. |
+| `TOML_CONFIG_FILE` | One of | Local filesystem path to the TOML runner config. Mutually exclusive with `SSM_PARAMETER_NAME`. Useful for local development. |
+| `SSM_POLL_INTERVAL` | No | How often to poll the config source (SSM parameter or file) for changes (default `5m`) |
 | `RUNNER_EXECUTION_ROLE_ARN` | Yes | IAM execution role ARN applied to dynamically-registered runner task definitions |
 | `RUNNER_TASK_ROLE_ARN` | Yes | IAM task role ARN applied to dynamically-registered runner task definitions |
 | `RUNNER_LOG_GROUP` | Yes | CloudWatch log group for runner containers |
@@ -101,7 +102,7 @@ The CloudFormation template sets all of these on the controller task. Only set t
 
 ### TOML Runner Configuration
 
-All per-scale-set configuration (CPU, memory, min/max runners, subnets, security groups, capacity provider, launch type, DinD, max runtime, ...) lives in a TOML document stored in SSM Parameter Store. The controller reconciles ECS task definitions to match.
+All per-scale-set configuration (CPU, memory, min/max runners, subnets, security groups, capacity provider, launch type, DinD, max runtime, ...) lives in a TOML document. The controller reconciles ECS task definitions and GitHub scale sets to match. The TOML can be stored in SSM Parameter Store (production) or a local file (development); set `SSM_PARAMETER_NAME` or `TOML_CONFIG_FILE` respectively (exactly one).
 
 See [`deploy/sample-runners.toml`](deploy/sample-runners.toml) for a working example. In short:
 
@@ -109,7 +110,7 @@ See [`deploy/sample-runners.toml`](deploy/sample-runners.toml) for a working exa
 - `[[runner]]` -- declares a single concrete runner variant.
 - `[[template]]` -- expands `sizes × features` into many runner variants automatically, with optional `[template.exclude]` combinations.
 
-Updating the SSM parameter is the only way to add, remove, or resize scale sets at runtime.
+Updating the config source is the only way to add, remove, or resize scale sets at runtime.
 
 ## IAM Permissions
 
@@ -200,11 +201,11 @@ Add permissions based on what your GitHub Actions workflows need (e.g. S3 access
 
 ## Architecture
 
-The controller runs as a single ECS service (desired count 1). A reconciler polls SSM for the TOML config and emits events; the controller spawns one goroutine per active scale set in response:
+The controller runs as a single ECS service (desired count 1). A reconciler polls a pluggable `ConfigSource` (SSM parameter or local file) for the TOML config and emits events; the controller spawns one goroutine per active scale set in response:
 
 ```
 main process
-  |- reconciler        -> SSM poll -> register/deregister task defs -> events
+  |- reconciler        -> source.Fetch -> register/deregister task defs -> events
   |- goroutine: scale set "runner-small"  -> listener.Run(ctx, scaler)
   |- goroutine: scale set "runner-medium" -> listener.Run(ctx, scaler)
   |- goroutine: scale set "runner-large"  -> listener.Run(ctx, scaler)
@@ -212,10 +213,10 @@ main process
 
 ### Reconciliation Flow
 
-1. The reconciler reads the TOML from SSM at `SSM_PARAMETER_NAME` on startup and every `SSM_POLL_INTERVAL`.
+1. The reconciler reads the TOML from its configured source on startup and every `SSM_POLL_INTERVAL`. The source is either `SSMSource` (backed by `SSM_PARAMETER_NAME`, version token = parameter version) or `FileSource` (backed by `TOML_CONFIG_FILE`, version token = SHA-256 of contents).
 2. Templates are expanded into concrete runner configs; the diff against observed state emits `Create` / `Update` / `Remove` events.
-3. `Create` events trigger `RegisterTaskDefinition` and start a scale set goroutine. `Remove` deregisters the task definition and cancels the goroutine. `Update` currently logs a warning -- configuration changes to a live scale set require a controller restart.
-4. On startup, task definitions that are tagged as managed but no longer present in the TOML are deregistered (orphan cleanup).
+3. `Create` events trigger `RegisterTaskDefinition` and start a scale set goroutine. `Remove` deregisters the task definition, cancels the goroutine, and deletes the scale set on GitHub (only if it carries the `ecs-arc.managed` label). `Update` currently logs a warning -- configuration changes to a live scale set require a controller restart.
+4. On startup, task definitions that are tagged as managed but no longer present in the TOML are deregistered, and managed scale sets on GitHub whose names no longer correspond to a desired family are deleted (orphan cleanup). Only resources carrying the `ecs-arc.managed` system label are ever deleted; foreign scale sets in the same runner group are left alone.
 
 ### Scaling Flow
 
@@ -253,7 +254,10 @@ export GITHUB_APP_PRIVATE_KEY="$(cat path/to/private-key.pem)"
 export GITHUB_ORG=my-org
 
 export ECS_CLUSTER=my-cluster
+
+# Choose ONE of these (not both):
 export SSM_PARAMETER_NAME=/dev/ecs-arc/runners
+# export TOML_CONFIG_FILE=./deploy/sample-runners.toml
 
 export RUNNER_EXECUTION_ROLE_ARN=arn:aws:iam::123456789012:role/runner-execution
 export RUNNER_TASK_ROLE_ARN=arn:aws:iam::123456789012:role/runner-task
