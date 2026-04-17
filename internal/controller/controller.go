@@ -24,6 +24,22 @@ import (
 	"github.com/niranjan94/ecs-arc/internal/tomlcfg"
 )
 
+// ScaleSetClient is the subset of *scaleset.Client the controller needs. It
+// exists so tests can provide a fake implementation. It is a superset of the
+// methods used directly by the controller plus those forwarded to the scaler
+// (see scaler.ScaleSetClient).
+type ScaleSetClient interface {
+	CreateRunnerScaleSet(ctx context.Context, rss *scaleset.RunnerScaleSet) (*scaleset.RunnerScaleSet, error)
+	GetRunnerScaleSet(ctx context.Context, runnerGroupID int, name string) (*scaleset.RunnerScaleSet, error)
+	UpdateRunnerScaleSet(ctx context.Context, id int, rss *scaleset.RunnerScaleSet) (*scaleset.RunnerScaleSet, error)
+	DeleteRunnerScaleSet(ctx context.Context, id int) error
+	ListRunnerScaleSets(ctx context.Context, runnerGroupID int) ([]scaleset.RunnerScaleSet, error)
+	MessageSessionClient(ctx context.Context, scaleSetID int, owner string, options ...scaleset.HTTPOption) (*scaleset.MessageSessionClient, error)
+	GenerateJitRunnerConfig(ctx context.Context, setting *scaleset.RunnerScaleSetJitRunnerSetting, scaleSetID int) (*scaleset.RunnerScaleSetJitRunnerConfig, error)
+	GetRunnerByName(ctx context.Context, name string) (*scaleset.RunnerReference, error)
+	RemoveRunner(ctx context.Context, runnerID int64) error
+}
+
 // Controller manages the lifecycle of all scale set goroutines.
 type Controller struct {
 	cfg       *config.Config
@@ -131,7 +147,7 @@ func (c *Controller) Run(ctx context.Context) error {
 
 func (c *Controller) runScaleSet(
 	ctx context.Context,
-	scalesetClient *scaleset.Client,
+	scalesetClient ScaleSetClient,
 	ecsRunner *runner.ECSRunner,
 	scaleSetName string,
 	taskDefFamily string,
