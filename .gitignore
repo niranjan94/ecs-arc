@@ -25,4 +25,5 @@ go.work.sum
 # env file
 .env
 /ecs-arc
-docs/superpowers/
+docs/specs/
+docs/plans/

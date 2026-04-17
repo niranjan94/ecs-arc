@@ -20,22 +20,18 @@ aws secretsmanager create-secret \
   --secret-string file://private-key.pem
 ```
 
-2. Obtain the CloudFormation template. Download the latest `template.yaml` from the [releases page](https://github.com/niranjan94/ecs-arc/releases), or generate it locally:
+2. Download the latest `template.yaml` from the [releases page](https://github.com/niranjan94/ecs-arc/releases). The template is static -- there is no generator.
 
-```bash
-go run ./cmd/ecs-arc generate-template -o template.yaml
-```
+3. Deploy the CloudFormation template. The stack creates an empty SSM Parameter (`/prod/ecs-arc/runners` by default) that you will populate in step 4.
 
-3. Deploy the CloudFormation template.
-
-**ECS Anywhere (EXTERNAL)** -- no VPC/subnets/security groups needed:
+**ECS Anywhere (EXTERNAL)** controller -- no VPC/subnets/security groups needed for the controller itself:
 
 ```bash
 aws cloudformation deploy \
   --template-file template.yaml \
   --stack-name ecs-arc \
   --parameter-overrides \
-    EcsLaunchType=EXTERNAL \
+    ControllerLaunchType=EXTERNAL \
     GitHubAppClientId=Iv1.abc123 \
     GitHubAppInstallationId=12345 \
     GitHubAppPrivateKeyArn=arn:aws:secretsmanager:us-east-1:123456789:secret:gh-app-key-AbCdEf \
@@ -44,7 +40,7 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
-**Fargate Spot** (default):
+**Fargate Spot** controller (default):
 
 ```bash
 aws cloudformation deploy \
@@ -60,17 +56,33 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
-4. Target runners in your workflows:
+`ControllerLaunchType` only affects how the **controller** itself runs. Runner tasks are configured per-scale-set in the TOML (see step 4) and can independently use `FARGATE`, `FARGATE_SPOT`, `EXTERNAL`, or EC2 Managed Instances.
+
+4. Populate the SSM parameter with your runner TOML config. Start from [`deploy/sample-runners.toml`](deploy/sample-runners.toml):
+
+```bash
+aws ssm put-parameter \
+  --name "/prod/ecs-arc/runners" \
+  --type String \
+  --overwrite \
+  --value "$(cat runners.toml)"
+```
+
+The controller polls this parameter every `SSM_POLL_INTERVAL` (default 5m) and reconciles ECS task definitions to match. New `[[runner]]` or `[[template]]` entries spawn scale sets; removed entries deregister them.
+
+5. Target runners in your workflows using the scale set name (task definition family name, optionally prefixed by `SCALESET_NAME_PREFIX`):
 
 ```yaml
 jobs:
   build:
-    runs-on: runner-small  # matches the task definition family name
+    runs-on: runner-small
 ```
 
 ## Configuration
 
 ### Environment Variables
+
+The CloudFormation template sets all of these on the controller task. Only set them manually if you are running the controller outside the provided template.
 
 | Variable | Required | Description |
 |---|---|---|
@@ -78,25 +90,26 @@ jobs:
 | `GITHUB_APP_INSTALLATION_ID` | Yes | GitHub App Installation ID |
 | `GITHUB_APP_PRIVATE_KEY` | Yes | PEM-encoded GitHub App private key |
 | `GITHUB_ORG` | Yes | GitHub organization name |
-| `ECS_CLUSTER` | Yes | ECS cluster name or ARN |
-| `ECS_SUBNETS` | No | Comma-separated subnet IDs (required for Fargate/Managed Instances) |
-| `ECS_SECURITY_GROUPS` | No | Comma-separated security group IDs (required for Fargate/Managed Instances) |
-| `TASK_DEFINITIONS` | Yes | Comma-separated ECS task definition family names |
-| `ECS_CAPACITY_PROVIDER` | No | Capacity provider name (omit for Fargate or EXTERNAL) |
-| `SCALESET_NAME_PREFIX` | No | Prefix for scale set names (e.g. `prod` -> `prod-runner-small`) |
+| `ECS_CLUSTER` | Yes | ECS cluster name or ARN where runner tasks will be launched |
+| `SSM_PARAMETER_NAME` | Yes | Full SSM parameter name holding the TOML runner config (must start with `/`) |
+| `SSM_POLL_INTERVAL` | No | How often to poll SSM for config changes (default `5m`) |
+| `RUNNER_EXECUTION_ROLE_ARN` | Yes | IAM execution role ARN applied to dynamically-registered runner task definitions |
+| `RUNNER_TASK_ROLE_ARN` | Yes | IAM task role ARN applied to dynamically-registered runner task definitions |
+| `RUNNER_LOG_GROUP` | Yes | CloudWatch log group for runner containers |
+| `RUNNER_EXTRA_LABELS` | No | Comma-separated extra GitHub labels applied to every scale set |
+| `SCALESET_NAME_PREFIX` | No | Prefix for scale set names (e.g. `prod` -> `prod-runner-small`). Changes the GitHub label, not the ECS task definition family. |
 
-### Task Definition Tags
+### TOML Runner Configuration
 
-Per-scale-set configuration is set via tags on the ECS task definition. All tags use the `ecs-arc:` prefix.
+All per-scale-set configuration (CPU, memory, min/max runners, subnets, security groups, capacity provider, launch type, DinD, max runtime, ...) lives in a TOML document stored in SSM Parameter Store. The controller reconciles ECS task definitions to match.
 
-| Tag | Default | Description |
-|---|---|---|
-| `ecs-arc:max-runners` | `10` | Maximum concurrent runners for this scale set |
-| `ecs-arc:min-runners` | `0` | Minimum idle runners to maintain |
-| `ecs-arc:max-runtime` | `6h` | Maximum time a runner task can run before being stopped |
-| `ecs-arc:subnets` | Global config | Override subnets for this scale set |
-| `ecs-arc:security-groups` | Global config | Override security groups for this scale set |
-| `ecs-arc:capacity-provider` | Global config | Override capacity provider for this scale set |
+See [`deploy/sample-runners.toml`](deploy/sample-runners.toml) for a working example. In short:
+
+- `[defaults]` -- baseline applied to every runner (e.g. `compatibility`, `network_mode`, `max_runtime`).
+- `[[runner]]` -- declares a single concrete runner variant.
+- `[[template]]` -- expands `sizes × features` into many runner variants automatically, with optional `[template.exclude]` combinations.
+
+Updating the SSM parameter is the only way to add, remove, or resize scale sets at runtime.
 
 ## IAM Permissions
 
@@ -104,7 +117,7 @@ The CloudFormation template creates all required IAM roles automatically. If you
 
 ### Controller Task Role
 
-The controller needs to manage ECS runner tasks and describe task definitions. `ecs:TagResource` is required because `RunTask` applies tags (`ecs-arc:scale-set`, `ecs-arc:runner-name`) and propagates task definition tags to each task. Cluster-scoped actions are restricted to the target cluster; `DescribeTaskDefinition` is account-global and cannot be cluster-scoped.
+The controller manages runner ECS tasks **and** reconciles their task definitions from the TOML in SSM. `ecs:TagResource` lets `RunTask` apply per-task tags (`ecs-arc:scale-set`, `ecs-arc:runner-name`). `ecs:RegisterTaskDefinition`/`DeregisterTaskDefinition`/`ListTaskDefinitionFamilies` are account-global (not cluster-scoped) and are required for the reconciler.
 
 ```json
 {
@@ -128,12 +141,21 @@ The controller needs to manage ECS runner tasks and describe task definitions. `
       }
     },
     {
-      "Sid": "EcsDescribeTaskDefinitions",
+      "Sid": "EcsTaskDefinitionManagement",
       "Effect": "Allow",
       "Action": [
-        "ecs:DescribeTaskDefinition"
+        "ecs:RegisterTaskDefinition",
+        "ecs:DeregisterTaskDefinition",
+        "ecs:DescribeTaskDefinition",
+        "ecs:ListTaskDefinitionFamilies"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "SsmReadRunnerConfig",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/PATH/TO/RUNNERS"
     },
     {
       "Sid": "PassRunnerRoles",
@@ -178,34 +200,41 @@ Add permissions based on what your GitHub Actions workflows need (e.g. S3 access
 
 ## Architecture
 
-The controller runs as a single ECS service (desired count 1) and spawns one goroutine per configured scale set:
+The controller runs as a single ECS service (desired count 1). A reconciler polls SSM for the TOML config and emits events; the controller spawns one goroutine per active scale set in response:
 
 ```
 main process
+  |- reconciler        -> SSM poll -> register/deregister task defs -> events
   |- goroutine: scale set "runner-small"  -> listener.Run(ctx, scaler)
   |- goroutine: scale set "runner-medium" -> listener.Run(ctx, scaler)
   |- goroutine: scale set "runner-large"  -> listener.Run(ctx, scaler)
 ```
 
+### Reconciliation Flow
+
+1. The reconciler reads the TOML from SSM at `SSM_PARAMETER_NAME` on startup and every `SSM_POLL_INTERVAL`.
+2. Templates are expanded into concrete runner configs; the diff against observed state emits `Create` / `Update` / `Remove` events.
+3. `Create` events trigger `RegisterTaskDefinition` and start a scale set goroutine. `Remove` deregisters the task definition and cancels the goroutine. `Update` currently logs a warning -- configuration changes to a live scale set require a controller restart.
+4. On startup, task definitions that are tagged as managed but no longer present in the TOML are deregistered (orphan cleanup).
+
 ### Scaling Flow
 
-1. The `listener` polls GitHub for desired runner count via long-polling message sessions
-2. `HandleDesiredRunnerCount` computes the target (clamped by min/max), then calls `GenerateJitRunnerConfig` + `ecs:RunTask` for each new runner needed
-3. The JIT config is injected via the `ACTIONS_RUNNER_INPUT_JITCONFIG` environment variable as a container override
-4. When a job starts, `HandleJobStarted` marks the runner as busy
-5. When a job completes, `HandleJobCompleted` removes the runner from tracking; the ephemeral ECS task exits on its own
-6. A reaper goroutine periodically stops tasks stuck in PENDING (>5min) or exceeding max runtime
+1. The `listener` polls GitHub for desired runner count via long-polling message sessions.
+2. `HandleDesiredRunnerCount` computes the target (clamped by min/max), then calls `GenerateJitRunnerConfig` + `ecs:RunTask` for each new runner needed.
+3. The JIT config is injected via the `ACTIONS_RUNNER_INPUT_JITCONFIG` environment variable as a container override.
+4. When a job starts, `HandleJobStarted` marks the runner as busy.
+5. When a job completes, `HandleJobCompleted` removes the runner from tracking; the ephemeral ECS task exits on its own.
+6. A reaper goroutine periodically stops tasks stuck in PENDING (>5min) or exceeding `max_runtime`.
 
 ### Workflow Targeting
 
-Scale set names become runner labels. With `TASK_DEFINITIONS=runner-small,runner-large` and `SCALESET_NAME_PREFIX=prod`:
+The scale set name is the runner label used in workflows. It is derived from the TOML runner family, optionally prefixed by `SCALESET_NAME_PREFIX`. For example, with `SCALESET_NAME_PREFIX=prod` and a TOML family `runner-small`:
 
 ```yaml
-runs-on: prod-runner-small   # routes to the runner-small task definition
-runs-on: prod-runner-large   # routes to the runner-large task definition
+runs-on: prod-runner-small
 ```
 
-Without a prefix, the task definition family name is used directly as the label.
+Without a prefix, the family name is used directly as the label.
 
 ## Development
 
@@ -222,15 +251,18 @@ export GITHUB_APP_CLIENT_ID=Iv1.abc123
 export GITHUB_APP_INSTALLATION_ID=12345
 export GITHUB_APP_PRIVATE_KEY="$(cat path/to/private-key.pem)"
 export GITHUB_ORG=my-org
-export ECS_CLUSTER=my-cluster
-export TASK_DEFINITIONS=runner-small
 
-# For Fargate/Managed Instances (awsvpc networking):
-export ECS_SUBNETS=subnet-aaa
-export ECS_SECURITY_GROUPS=sg-xxx
+export ECS_CLUSTER=my-cluster
+export SSM_PARAMETER_NAME=/dev/ecs-arc/runners
+
+export RUNNER_EXECUTION_ROLE_ARN=arn:aws:iam::123456789012:role/runner-execution
+export RUNNER_TASK_ROLE_ARN=arn:aws:iam::123456789012:role/runner-task
+export RUNNER_LOG_GROUP=/ecs-arc/runners
 
 go run ./cmd/ecs-arc controller
 ```
+
+Subnets, security groups, and capacity providers are configured per runner in the TOML, not via environment variables.
 
 ### Testing
 
