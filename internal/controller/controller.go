@@ -24,6 +24,28 @@ import (
 	"github.com/niranjan94/ecs-arc/internal/tomlcfg"
 )
 
+// ManagedLabelName is the reserved system label ecs-arc injects on every
+// scale set it manages. Presence of this label is the marker used by the
+// startup sweep and runtime deletion path to distinguish ecs-arc-owned
+// scale sets from foreign ones in the same runner group.
+const ManagedLabelName = "ecs-arc.managed"
+
+func injectManagedLabel(rss *scaleset.RunnerScaleSet) {
+	if hasManagedLabel(rss.Labels) {
+		return
+	}
+	rss.Labels = append(rss.Labels, scaleset.Label{Name: ManagedLabelName, Type: "System"})
+}
+
+func hasManagedLabel(labels []scaleset.Label) bool {
+	for _, l := range labels {
+		if l.Name == ManagedLabelName {
+			return true
+		}
+	}
+	return false
+}
+
 // ScaleSetClient is the subset of *scaleset.Client the controller needs. It
 // exists so tests can provide a fake implementation. It is a superset of the
 // methods used directly by the controller plus those forwarded to the scaler
@@ -167,6 +189,7 @@ func (c *Controller) runScaleSet(
 		Labels:        labels,
 		RunnerSetting: scaleset.RunnerSetting{DisableUpdate: true},
 	}
+	injectManagedLabel(desired)
 
 	scaleSet, err := scalesetClient.CreateRunnerScaleSet(ctx, desired)
 	if err != nil {
@@ -178,6 +201,7 @@ func (c *Controller) runScaleSet(
 		if getErr != nil {
 			return fmt.Errorf("failed to get existing scale set: %w", getErr)
 		}
+		injectManagedLabel(desired)
 		scaleSet, err = scalesetClient.UpdateRunnerScaleSet(ctx, existing.ID, desired)
 		if err != nil {
 			return fmt.Errorf("failed to update existing scale set: %w", err)
