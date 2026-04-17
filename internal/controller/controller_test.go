@@ -163,3 +163,21 @@ func TestHasManagedLabel(t *testing.T) {
 		})
 	}
 }
+
+func TestController_EventRemove_DeletesScaleSetOnGitHub(t *testing.T) {
+	fake := newFakeScaleSetClient()
+	fake.byName["runner-gone"] = &scaleset.RunnerScaleSet{
+		ID:     99,
+		Name:   "runner-gone",
+		Labels: []scaleset.Label{{Name: ManagedLabelName, Type: "System"}},
+	}
+	c := &Controller{
+		cfg:    &config.Config{},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	c.deleteScaleSetIfManaged(context.Background(), fake, "runner-gone")
+	if len(fake.deleteCalls) != 1 || fake.deleteCalls[0] != 99 {
+		t.Fatalf("expected DeleteRunnerScaleSet(99), got %+v", fake.deleteCalls)
+	}
+}
