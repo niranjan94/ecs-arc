@@ -3,6 +3,7 @@ package reconciler
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	ecsTypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmTypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/niranjan94/ecs-arc/internal/tomlcfg"
 )
 
 // --- Mock SSM Client ---
@@ -492,4 +494,39 @@ func (m *familyAwareMockECS) ListTaskDefinitionFamilies(_ context.Context, _ *ec
 	return &ecs.ListTaskDefinitionFamiliesOutput{
 		Families: m.listFamilies,
 	}, nil
+}
+
+func TestReconciler_StartupDoneClosesAfterStartup(t *testing.T) {
+	events := make(chan ReconcileEvent, 16)
+	r := New(
+		&mockSSMClient{paramValue: `[[runner]]
+family = "x"
+cpu = 1024
+memory = 2048
+`, paramVersion: 1},
+		newMockECSRegistrar(),
+		"param", time.Minute, InfraConfig{}, events,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Run(ctx)
+
+	select {
+	case <-r.StartupDone():
+	case <-time.After(2 * time.Second):
+		t.Fatal("StartupDone did not close within 2s")
+	}
+}
+
+func TestReconciler_DesiredSnapshot_ReturnsCopy(t *testing.T) {
+	r := &Reconciler{desired: map[string]*tomlcfg.ResolvedRunnerConfig{
+		"a": {Family: "a"},
+	}}
+	snap := r.DesiredSnapshot()
+	delete(snap, "a")
+	if _, ok := r.desired["a"]; !ok {
+		t.Fatalf("DesiredSnapshot returned live map; expected shallow copy")
+	}
 }

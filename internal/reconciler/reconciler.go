@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -55,11 +56,13 @@ type Reconciler struct {
 	ecsClient    ECSRegistrar
 	paramName    string
 	pollInterval time.Duration
+	mu           sync.RWMutex
 	lastVersion  int64
 	infra        InfraConfig
 	desired      map[string]*tomlcfg.ResolvedRunnerConfig
 	events       chan<- ReconcileEvent
 	logger       *slog.Logger
+	startupDone  chan struct{}
 }
 
 // New creates a new Reconciler.
@@ -81,7 +84,23 @@ func New(
 		desired:      make(map[string]*tomlcfg.ResolvedRunnerConfig),
 		events:       events,
 		logger:       logger,
+		startupDone:  make(chan struct{}),
 	}
+}
+
+// StartupDone is closed after reconcileStartup returns.
+func (r *Reconciler) StartupDone() <-chan struct{} { return r.startupDone }
+
+// DesiredSnapshot returns a shallow copy of the desired runner config map.
+// Safe to call concurrently with the reconcile loop.
+func (r *Reconciler) DesiredSnapshot() map[string]*tomlcfg.ResolvedRunnerConfig {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]*tomlcfg.ResolvedRunnerConfig, len(r.desired))
+	for k, v := range r.desired {
+		out[k] = v
+	}
+	return out
 }
 
 // Run starts the reconciliation loop. It performs startup reconciliation
@@ -113,7 +132,10 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 
 	// 2. Version check
 	version := param.Parameter.Version
-	if version == r.lastVersion {
+	r.mu.RLock()
+	lastVersion := r.lastVersion
+	r.mu.RUnlock()
+	if version == lastVersion {
 		return
 	}
 
@@ -130,8 +152,15 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 	}
 
 	// 4. Diff: new and changed families
+	r.mu.RLock()
+	existingFamilies := make(map[string]struct{}, len(r.desired))
+	for family := range r.desired {
+		existingFamilies[family] = struct{}{}
+	}
+	r.mu.RUnlock()
+
 	for family, newCfg := range newDesired {
-		if _, exists := r.desired[family]; !exists {
+		if _, exists := existingFamilies[family]; !exists {
 			// New family
 			td, regErr := r.registerTaskDef(ctx, newCfg)
 			if regErr != nil {
@@ -151,18 +180,21 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 	}
 
 	// 5. Diff: removed families
-	for family := range r.desired {
+	for family := range existingFamilies {
 		if _, exists := newDesired[family]; !exists {
 			r.events <- ReconcileEvent{Kind: EventRemove, Family: family}
 		}
 	}
 
 	// 6. Update state
+	r.mu.Lock()
 	r.desired = newDesired
 	r.lastVersion = version
+	r.mu.Unlock()
 }
 
 func (r *Reconciler) reconcileStartup(ctx context.Context) {
+	defer close(r.startupDone)
 	// Fetch and parse
 	param, err := r.ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
 		Name: aws.String(r.paramName),
@@ -219,8 +251,10 @@ func (r *Reconciler) reconcileStartup(ctx context.Context) {
 	// Orphan cleanup: find managed families not in TOML
 	r.cleanupOrphans(ctx, newDesired)
 
+	r.mu.Lock()
 	r.desired = newDesired
 	r.lastVersion = param.Parameter.Version
+	r.mu.Unlock()
 }
 
 func (r *Reconciler) cleanupOrphans(ctx context.Context, desired map[string]*tomlcfg.ResolvedRunnerConfig) {
