@@ -66,16 +66,16 @@ type ScaleSetClient interface {
 type Controller struct {
 	cfg       *config.Config
 	ecsClient *ecs.Client
-	ssmClient reconciler.SSMClient
+	source    reconciler.ConfigSource
 	logger    *slog.Logger
 }
 
-// New creates a new Controller.
-func New(cfg *config.Config, ecsClient *ecs.Client, ssmClient reconciler.SSMClient, logger *slog.Logger) *Controller {
+// New creates a new Controller. source is the TOML config source the reconciler will poll.
+func New(cfg *config.Config, ecsClient *ecs.Client, source reconciler.ConfigSource, logger *slog.Logger) *Controller {
 	return &Controller{
 		cfg:       cfg,
 		ecsClient: ecsClient,
-		ssmClient: ssmClient,
+		source:    source,
 		logger:    logger,
 	}
 }
@@ -109,9 +109,8 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 
 	events := make(chan reconciler.ReconcileEvent, 16)
-	source := reconciler.NewSSMSource(c.ssmClient, c.cfg.SSMParameterName)
 	rec := reconciler.New(
-		source, c.ecsClient,
+		c.source, c.ecsClient,
 		c.cfg.SSMPollInterval,
 		infra, events, c.logger.WithGroup("reconciler"),
 	)

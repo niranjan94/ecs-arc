@@ -14,6 +14,7 @@ import (
 	"github.com/niranjan94/ecs-arc/internal/config"
 	"github.com/niranjan94/ecs-arc/internal/controller"
 	"github.com/niranjan94/ecs-arc/internal/logging"
+	"github.com/niranjan94/ecs-arc/internal/reconciler"
 	"github.com/spf13/cobra"
 )
 
@@ -46,7 +47,6 @@ func runController() error {
 	logger.Info("ecs-arc controller starting",
 		slog.String("org", cfg.GitHubOrg),
 		slog.String("cluster", cfg.ECSCluster),
-		slog.String("ssm_parameter", cfg.SSMParameterName),
 	)
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
@@ -55,8 +55,19 @@ func runController() error {
 	}
 
 	ecsClient := ecs.NewFromConfig(awsCfg)
-	ssmClient := ssm.NewFromConfig(awsCfg)
-	ctrl := controller.New(cfg, ecsClient, ssmClient, logger)
+
+	var source reconciler.ConfigSource
+	switch {
+	case cfg.TOMLConfigFile != "":
+		source = reconciler.NewFileSource(cfg.TOMLConfigFile)
+		logger.Info("reading runner config from file", slog.String("path", cfg.TOMLConfigFile))
+	default:
+		ssmClient := ssm.NewFromConfig(awsCfg)
+		source = reconciler.NewSSMSource(ssmClient, cfg.SSMParameterName)
+		logger.Info("reading runner config from SSM", slog.String("parameter", cfg.SSMParameterName))
+	}
+
+	ctrl := controller.New(cfg, ecsClient, source, logger)
 
 	return ctrl.Run(ctx)
 }
