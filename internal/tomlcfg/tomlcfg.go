@@ -31,6 +31,7 @@ type DefaultsConfig struct {
 	MinRunners       *int     `toml:"min_runners"`
 	MaxRuntime       string   `toml:"max_runtime"`
 	CapacityProvider string   `toml:"capacity_provider"`
+	ExtraLabels      []string `toml:"extra_labels"`
 }
 
 // RunnerConfig is one explicit [[runner]] entry. Pointer fields allow
@@ -210,7 +211,7 @@ func Resolve(cfg *Config) (map[string]*ResolvedRunnerConfig, error) {
 		// Slice fields: runner > defaults (no hardcoded)
 		resolved.Subnets = resolveSlice(r.Subnets, cfg.Defaults.Subnets)
 		resolved.SecurityGroups = resolveSlice(r.SecurityGroups, cfg.Defaults.SecurityGroups)
-		resolved.ExtraLabels = r.ExtraLabels
+		resolved.ExtraLabels = append(append([]string(nil), cfg.Defaults.ExtraLabels...), r.ExtraLabels...)
 
 		// Validation
 		if err := validateArchitecture(resolved.Architecture); err != nil {

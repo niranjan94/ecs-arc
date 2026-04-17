@@ -983,6 +983,58 @@ extra_labels = ["gpu"]
 	}
 }
 
+func TestResolve_DefaultsExtraLabels(t *testing.T) {
+	input := []byte(`
+[defaults]
+extra_labels = ["self-hosted", "team-x"]
+
+[[runner]]
+family = "explicit"
+cpu = 1024
+memory = 2048
+extra_labels = ["gpu"]
+
+[[template]]
+family_prefix = "tpl"
+
+[template.sizes]
+small = { cpu = 1024, memory = 2048 }
+
+[template.features]
+plain = {}
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resolved, err := Resolve(cfg)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	exp := resolved["explicit"]
+	if exp == nil {
+		t.Fatal("missing explicit runner")
+	}
+	expLabels := exp.Labels()
+	for _, want := range []string{"self-hosted", "team-x", "gpu"} {
+		if !contains(expLabels, want) {
+			t.Errorf("explicit labels %v missing %q", expLabels, want)
+		}
+	}
+
+	tpl := resolved["tpl-small-plain"]
+	if tpl == nil {
+		t.Fatal("missing tpl-small-plain runner")
+	}
+	tplLabels := tpl.Labels()
+	for _, want := range []string{"self-hosted", "team-x", "small", "plain"} {
+		if !contains(tplLabels, want) {
+			t.Errorf("tpl-small-plain labels %v missing %q", tplLabels, want)
+		}
+	}
+}
+
 func contains(haystack []string, needle string) bool {
 	for _, s := range haystack {
 		if s == needle {
