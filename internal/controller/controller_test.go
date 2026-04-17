@@ -54,7 +54,7 @@ func TestRunScaleSet_CreatePath_InjectsManagedLabel(t *testing.T) {
 	fake := newFakeScaleSetClient()
 	desired := &scaleset.RunnerScaleSet{Name: "x", RunnerGroupID: 1}
 	injectManagedLabel(desired)
-	if _, err := fake.CreateRunnerScaleSet(nil, desired); err != nil {
+	if _, err := fake.CreateRunnerScaleSet(context.Background(), desired); err != nil {
 		t.Fatal(err)
 	}
 	if !hasManagedLabel(fake.createCalls[0].Labels) {
