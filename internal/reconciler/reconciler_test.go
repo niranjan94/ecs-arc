@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"testing"
 	"time"
 
@@ -540,5 +541,93 @@ func TestReconciler_DesiredSnapshot_ReturnsCopy(t *testing.T) {
 	delete(snap, "a")
 	if _, ok := r.desired["a"]; !ok {
 		t.Fatalf("DesiredSnapshot returned live map; expected shallow copy")
+	}
+}
+
+func TestReconciler_FileSource_PicksUpFileChanges(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/runners.toml"
+	write := func(content string) {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`[defaults]
+compatibility = "FARGATE"
+subnets = ["subnet-a"]
+security_groups = ["sg-a"]
+
+[[runner]]
+family = "alpha"
+cpu = 1024
+memory = 2048
+`)
+
+	events := make(chan ReconcileEvent, 16)
+	mockECS := newMockECSRegistrar()
+	mockECS.describeErr = fmt.Errorf("not found") // task defs don't pre-exist
+	r := New(
+		NewFileSource(path),
+		mockECS,
+		10*time.Millisecond,
+		InfraConfig{},
+		events,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Run(ctx)
+
+	// Wait for startup to finish.
+	select {
+	case <-r.StartupDone():
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup did not finish")
+	}
+
+	// Drain startup events.
+	initial := drainEvents(events, 500*time.Millisecond)
+	if len(initial) == 0 {
+		t.Fatal("expected at least one startup event for alpha")
+	}
+
+	// Rewrite file without alpha.
+	write(`[defaults]
+compatibility = "FARGATE"
+subnets = ["subnet-a"]
+security_groups = ["sg-a"]
+
+[[runner]]
+family = "beta"
+cpu = 1024
+memory = 2048
+`)
+
+	// Expect an EventRemove for alpha and EventCreate for beta within one poll.
+	got := drainEvents(events, 500*time.Millisecond)
+	var sawRemove, sawCreate bool
+	for _, ev := range got {
+		if ev.Kind == EventRemove && ev.Family == "alpha" {
+			sawRemove = true
+		}
+		if ev.Kind == EventCreate && ev.Family == "beta" {
+			sawCreate = true
+		}
+	}
+	if !sawRemove || !sawCreate {
+		t.Fatalf("expected remove(alpha)+create(beta), got %+v", got)
+	}
+}
+
+func drainEvents(events <-chan ReconcileEvent, timeout time.Duration) []ReconcileEvent {
+	var out []ReconcileEvent
+	deadline := time.After(timeout)
+	for {
+		select {
+		case ev := <-events:
+			out = append(out, ev)
+		case <-deadline:
+			return out
+		}
 	}
 }
