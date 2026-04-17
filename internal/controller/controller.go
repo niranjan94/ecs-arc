@@ -119,6 +119,85 @@ func (c *Controller) Run(ctx context.Context) error {
 	scaleSets := make(map[string]context.CancelFunc)
 	var wg sync.WaitGroup
 
+	handleEvent := func(event reconciler.ReconcileEvent) {
+		switch event.Kind {
+		case reconciler.EventCreate:
+			ssCfg := toScaleSetConfig(event.Config)
+			info := &taskdef.TaskDefInfo{
+				TaskDefinition: event.TaskDefinition,
+				Config:         ssCfg,
+			}
+			scaleSetName := c.cfg.ScaleSetName(event.Family)
+			ssCtx, cancel := context.WithCancel(ctx)
+			scaleSets[event.Family] = cancel
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := c.runScaleSet(ssCtx, scalesetClient, ecsRunner, scaleSetName, event.Family, info); err != nil {
+					c.logger.Error("scale set exited with error",
+						slog.String("scale_set", scaleSetName),
+						slog.String("error", err.Error()),
+					)
+				}
+			}()
+		case reconciler.EventUpdate:
+			c.logger.Warn("config changed for running scale set, restart required for changes to take effect",
+				slog.String("family", event.Family),
+				slog.String("event", "config_changed"),
+			)
+		case reconciler.EventRemove:
+			if cancel, ok := scaleSets[event.Family]; ok {
+				c.logger.Info("removing scale set",
+					slog.String("family", event.Family),
+					slog.String("event", "scale_set_removed"),
+				)
+				cancel()
+				delete(scaleSets, event.Family)
+			}
+			c.deleteScaleSetIfManaged(ctx, scalesetClient, c.cfg.ScaleSetName(event.Family))
+		}
+	}
+
+	// Startup phase: handle events until the reconciler signals startup is done.
+startupLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			for _, cancel := range scaleSets {
+				cancel()
+			}
+			wg.Wait()
+			return nil
+		case <-rec.StartupDone():
+			break startupLoop
+		case event := <-events:
+			handleEvent(event)
+		}
+	}
+
+	// Drain any events the reconciler emitted before startupDone fired.
+drain:
+	for {
+		select {
+		case event := <-events:
+			handleEvent(event)
+		default:
+			break drain
+		}
+	}
+
+	// Sweep orphan managed scale sets using the desired snapshot at this instant.
+	desired := make(map[string]struct{})
+	for fam := range rec.DesiredSnapshot() {
+		desired[fam] = struct{}{}
+	}
+	if err := c.cleanupOrphanScaleSets(ctx, scalesetClient, desired); err != nil {
+		c.logger.Error("startup sweep error",
+			slog.String("error", err.Error()),
+		)
+	}
+
+	// Steady-state loop.
 	for {
 		select {
 		case <-ctx.Done():
@@ -128,42 +207,7 @@ func (c *Controller) Run(ctx context.Context) error {
 			wg.Wait()
 			return nil
 		case event := <-events:
-			switch event.Kind {
-			case reconciler.EventCreate:
-				ssCfg := toScaleSetConfig(event.Config)
-				info := &taskdef.TaskDefInfo{
-					TaskDefinition: event.TaskDefinition,
-					Config:         ssCfg,
-				}
-				scaleSetName := c.cfg.ScaleSetName(event.Family)
-				ssCtx, cancel := context.WithCancel(ctx)
-				scaleSets[event.Family] = cancel
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					if err := c.runScaleSet(ssCtx, scalesetClient, ecsRunner, scaleSetName, event.Family, info); err != nil {
-						c.logger.Error("scale set exited with error",
-							slog.String("scale_set", scaleSetName),
-							slog.String("error", err.Error()),
-						)
-					}
-				}()
-			case reconciler.EventUpdate:
-				c.logger.Warn("config changed for running scale set, restart required for changes to take effect",
-					slog.String("family", event.Family),
-					slog.String("event", "config_changed"),
-				)
-			case reconciler.EventRemove:
-				if cancel, ok := scaleSets[event.Family]; ok {
-					c.logger.Info("removing scale set",
-						slog.String("family", event.Family),
-						slog.String("event", "scale_set_removed"),
-					)
-					cancel()
-					delete(scaleSets, event.Family)
-				}
-				c.deleteScaleSetIfManaged(ctx, scalesetClient, c.cfg.ScaleSetName(event.Family))
-			}
+			handleEvent(event)
 		}
 	}
 }
