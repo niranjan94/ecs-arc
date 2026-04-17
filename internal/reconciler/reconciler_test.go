@@ -36,6 +36,21 @@ func (m *mockSSMClient) GetParameter(_ context.Context, _ *ssm.GetParameterInput
 	}, nil
 }
 
+// --- Fake ConfigSource for reconciler tests ---
+
+type fakeSource struct {
+	content string
+	version string
+	err     error
+}
+
+func (f *fakeSource) Fetch(_ context.Context) ([]byte, string, error) {
+	if f.err != nil {
+		return nil, "", f.err
+	}
+	return []byte(f.content), f.version, nil
+}
+
 // --- Mock ECS Registrar ---
 
 type mockECSRegistrar struct {
@@ -96,19 +111,19 @@ var testReconcilerInfra = InfraConfig{
 	Region:           "us-east-1",
 }
 
-func newTestReconciler(ssmClient SSMClient, ecsClient ECSRegistrar, events chan<- ReconcileEvent) *Reconciler {
-	return New(ssmClient, ecsClient, "/param", 5*time.Minute, testReconcilerInfra, events, slog.Default())
+func newTestReconciler(source ConfigSource, ecsClient ECSRegistrar, events chan<- ReconcileEvent) *Reconciler {
+	return New(source, ecsClient, 5*time.Minute, testReconcilerInfra, events, slog.Default())
 }
 
 // --- Tests ---
 
 func TestReconciler_VersionSkip(t *testing.T) {
-	mockSSM := &mockSSMClient{paramValue: testTOML, paramVersion: 1}
+	src := &fakeSource{content: testTOML, version: "1"}
 	mockECS := newMockECSRegistrar()
 	mockECS.describeErr = fmt.Errorf("not found") // startup will register
 	events := make(chan ReconcileEvent, 16)
 
-	rec := newTestReconciler(mockSSM, mockECS, events)
+	rec := newTestReconciler(src, mockECS, events)
 
 	// First run: startup
 	ctx := context.Background()
@@ -141,12 +156,12 @@ func TestReconciler_VersionSkip(t *testing.T) {
 }
 
 func TestReconciler_NewFamily(t *testing.T) {
-	mockSSM := &mockSSMClient{paramValue: testTOML, paramVersion: 1}
+	src := &fakeSource{content: testTOML, version: "1"}
 	mockECS := newMockECSRegistrar()
 	mockECS.describeErr = fmt.Errorf("not found") // task def doesn't exist
 	events := make(chan ReconcileEvent, 16)
 
-	rec := newTestReconciler(mockSSM, mockECS, events)
+	rec := newTestReconciler(src, mockECS, events)
 
 	ctx := context.Background()
 	rec.reconcileStartup(ctx)
@@ -184,12 +199,12 @@ family = "test-runner"
 cpu = 2048
 memory = 4096
 `
-	mockSSM := &mockSSMClient{paramValue: toml1, paramVersion: 1}
+	src := &fakeSource{content: toml1, version: "1"}
 	mockECS := newMockECSRegistrar()
 	mockECS.describeErr = fmt.Errorf("not found")
 	events := make(chan ReconcileEvent, 16)
 
-	rec := newTestReconciler(mockSSM, mockECS, events)
+	rec := newTestReconciler(src, mockECS, events)
 
 	ctx := context.Background()
 	rec.reconcileStartup(ctx)
@@ -202,8 +217,8 @@ memory = 4096
 	// Change config
 	events = make(chan ReconcileEvent, 16)
 	rec.events = events
-	mockSSM.paramValue = toml2
-	mockSSM.paramVersion = 2
+	src.content = toml2
+	src.version = "2"
 
 	rec.reconcile(ctx)
 	close(events)
@@ -239,12 +254,12 @@ family = "runner-a"
 cpu = 1024
 memory = 2048
 `
-	mockSSM := &mockSSMClient{paramValue: toml1, paramVersion: 1}
+	src := &fakeSource{content: toml1, version: "1"}
 	mockECS := newMockECSRegistrar()
 	mockECS.describeErr = fmt.Errorf("not found")
 	events := make(chan ReconcileEvent, 16)
 
-	rec := newTestReconciler(mockSSM, mockECS, events)
+	rec := newTestReconciler(src, mockECS, events)
 
 	ctx := context.Background()
 	rec.reconcileStartup(ctx)
@@ -257,8 +272,8 @@ memory = 2048
 	// Remove runner-b
 	events = make(chan ReconcileEvent, 16)
 	rec.events = events
-	mockSSM.paramValue = toml2
-	mockSSM.paramVersion = 2
+	src.content = toml2
+	src.version = "2"
 
 	rec.reconcile(ctx)
 	close(events)
@@ -279,14 +294,14 @@ memory = 2048
 }
 
 func TestReconciler_StartupExistingManaged(t *testing.T) {
-	mockSSM := &mockSSMClient{paramValue: testTOML, paramVersion: 1}
+	src := &fakeSource{content: testTOML, version: "1"}
 	mockECS := newMockECSRegistrar()
 	mockECS.describeTags = []ecsTypes.Tag{
 		{Key: aws.String("ecs-arc:managed"), Value: aws.String("true")},
 	}
 	events := make(chan ReconcileEvent, 16)
 
-	rec := newTestReconciler(mockSSM, mockECS, events)
+	rec := newTestReconciler(src, mockECS, events)
 
 	ctx := context.Background()
 	rec.reconcileStartup(ctx)
@@ -307,13 +322,13 @@ func TestReconciler_StartupExistingManaged(t *testing.T) {
 }
 
 func TestReconciler_StartupExistingUnmanaged(t *testing.T) {
-	mockSSM := &mockSSMClient{paramValue: testTOML, paramVersion: 1}
+	src := &fakeSource{content: testTOML, version: "1"}
 	mockECS := newMockECSRegistrar()
 	// No managed tag
 	mockECS.describeTags = []ecsTypes.Tag{}
 	events := make(chan ReconcileEvent, 16)
 
-	rec := newTestReconciler(mockSSM, mockECS, events)
+	rec := newTestReconciler(src, mockECS, events)
 
 	ctx := context.Background()
 	rec.reconcileStartup(ctx)
@@ -334,10 +349,7 @@ func TestReconciler_StartupExistingUnmanaged(t *testing.T) {
 }
 
 func TestReconciler_StartupOrphanCleanup(t *testing.T) {
-	mockSSM := &mockSSMClient{paramValue: testTOML, paramVersion: 1}
-	mockECS := newMockECSRegistrar()
-	mockECS.describeErr = fmt.Errorf("not found") // primary family doesn't exist
-	mockECS.listFamilies = []string{"test-runner", "orphan-runner"}
+	src := &fakeSource{content: testTOML, version: "1"}
 	events := make(chan ReconcileEvent, 16)
 
 	// We need a more sophisticated mock for this test since DescribeTaskDefinition
@@ -357,7 +369,7 @@ func TestReconciler_StartupOrphanCleanup(t *testing.T) {
 		listFamilies: []string{"test-runner", "orphan-runner"},
 	}
 
-	rec := newTestReconciler(mockSSM, customECS, events)
+	rec := newTestReconciler(src, customECS, events)
 
 	ctx := context.Background()
 	rec.reconcileStartup(ctx)
@@ -411,7 +423,7 @@ cpu = 8192
 memory = 16384
 `
 
-	mockSSM := &mockSSMClient{paramValue: tomlData, paramVersion: 1}
+	src := &fakeSource{content: tomlData, version: "1"}
 	mockECS := newMockECSRegistrar()
 	mockECS.describeErr = fmt.Errorf("not found")
 
@@ -423,7 +435,7 @@ memory = 16384
 		Region:           "us-east-1",
 	}
 
-	rec := New(mockSSM, mockECS, "/param", 5*time.Minute, infra, events, slog.Default())
+	rec := New(src, mockECS, 5*time.Minute, infra, events, slog.Default())
 
 	ctx := context.Background()
 	rec.reconcileStartup(ctx)
@@ -499,13 +511,13 @@ func (m *familyAwareMockECS) ListTaskDefinitionFamilies(_ context.Context, _ *ec
 func TestReconciler_StartupDoneClosesAfterStartup(t *testing.T) {
 	events := make(chan ReconcileEvent, 16)
 	r := New(
-		&mockSSMClient{paramValue: `[[runner]]
+		&fakeSource{content: `[[runner]]
 family = "x"
 cpu = 1024
 memory = 2048
-`, paramVersion: 1},
+`, version: "1"},
 		newMockECSRegistrar(),
-		"param", time.Minute, InfraConfig{}, events,
+		time.Minute, InfraConfig{}, events,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 

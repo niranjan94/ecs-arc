@@ -50,14 +50,13 @@ type ReconcileEvent struct {
 	TaskDefinition *ecsTypes.TaskDefinition       // populated after Register
 }
 
-// Reconciler polls SSM for TOML config changes and reconciles ECS task definitions.
+// Reconciler polls a ConfigSource for TOML config changes and reconciles ECS task definitions.
 type Reconciler struct {
-	ssmClient    SSMClient
+	source       ConfigSource
 	ecsClient    ECSRegistrar
-	paramName    string
 	pollInterval time.Duration
 	mu           sync.RWMutex
-	lastVersion  int64
+	lastVersion  string
 	infra        InfraConfig
 	desired      map[string]*tomlcfg.ResolvedRunnerConfig
 	events       chan<- ReconcileEvent
@@ -67,18 +66,16 @@ type Reconciler struct {
 
 // New creates a new Reconciler.
 func New(
-	ssmClient SSMClient,
+	source ConfigSource,
 	ecsClient ECSRegistrar,
-	paramName string,
 	pollInterval time.Duration,
 	infra InfraConfig,
 	events chan<- ReconcileEvent,
 	logger *slog.Logger,
 ) *Reconciler {
 	return &Reconciler{
-		ssmClient:    ssmClient,
+		source:       source,
 		ecsClient:    ecsClient,
-		paramName:    paramName,
 		pollInterval: pollInterval,
 		infra:        infra,
 		desired:      make(map[string]*tomlcfg.ResolvedRunnerConfig),
@@ -121,17 +118,14 @@ func (r *Reconciler) Run(ctx context.Context) {
 }
 
 func (r *Reconciler) reconcile(ctx context.Context) {
-	// 1. Fetch SSM parameter
-	param, err := r.ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
-		Name: aws.String(r.paramName),
-	})
+	// 1. Fetch config
+	content, version, err := r.source.Fetch(ctx)
 	if err != nil {
-		r.logger.Error("failed to get SSM parameter", "error", err.Error())
+		r.logger.Error("failed to fetch config", "error", err.Error())
 		return
 	}
 
 	// 2. Version check
-	version := param.Parameter.Version
 	r.mu.RLock()
 	lastVersion := r.lastVersion
 	r.mu.RUnlock()
@@ -140,7 +134,7 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 	}
 
 	// 3. Parse and resolve
-	cfg, err := tomlcfg.Parse([]byte(aws.ToString(param.Parameter.Value)))
+	cfg, err := tomlcfg.Parse(content)
 	if err != nil {
 		r.logger.Error("failed to parse TOML config", "error", err.Error())
 		return
@@ -196,15 +190,13 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 func (r *Reconciler) reconcileStartup(ctx context.Context) {
 	defer close(r.startupDone)
 	// Fetch and parse
-	param, err := r.ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
-		Name: aws.String(r.paramName),
-	})
+	content, version, err := r.source.Fetch(ctx)
 	if err != nil {
-		r.logger.Error("failed to get SSM parameter on startup", "error", err.Error())
+		r.logger.Error("failed to fetch config on startup", "error", err.Error())
 		return
 	}
 
-	cfg, err := tomlcfg.Parse([]byte(aws.ToString(param.Parameter.Value)))
+	cfg, err := tomlcfg.Parse(content)
 	if err != nil {
 		r.logger.Error("failed to parse TOML config on startup", "error", err.Error())
 		return
@@ -253,7 +245,7 @@ func (r *Reconciler) reconcileStartup(ctx context.Context) {
 
 	r.mu.Lock()
 	r.desired = newDesired
-	r.lastVersion = param.Parameter.Version
+	r.lastVersion = version
 	r.mu.Unlock()
 }
 

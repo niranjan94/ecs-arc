@@ -109,9 +109,10 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 
 	events := make(chan reconciler.ReconcileEvent, 16)
+	source := reconciler.NewSSMSource(c.ssmClient, c.cfg.SSMParameterName)
 	rec := reconciler.New(
-		c.ssmClient, c.ecsClient,
-		c.cfg.SSMParameterName, c.cfg.SSMPollInterval,
+		source, c.ecsClient,
+		c.cfg.SSMPollInterval,
 		infra, events, c.logger.WithGroup("reconciler"),
 	)
 	go rec.Run(ctx)
