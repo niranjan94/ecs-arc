@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -55,7 +56,10 @@ func (f *fakeSource) Fetch(_ context.Context) ([]byte, string, error) {
 
 // --- Mock ECS Registrar ---
 
+// mockECSRegistrar is safe for concurrent use: the reconciler Run goroutine
+// calls its methods while tests may read counters and recorded ARNs.
 type mockECSRegistrar struct {
+	mu                sync.Mutex
 	registerCalled    int
 	describeErr       error
 	describeTags      []ecsTypes.Tag
@@ -69,19 +73,32 @@ func newMockECSRegistrar() *mockECSRegistrar {
 }
 
 func (m *mockECSRegistrar) RegisterTaskDefinition(_ context.Context, input *ecs.RegisterTaskDefinitionInput, _ ...func(*ecs.Options)) (*ecs.RegisterTaskDefinitionOutput, error) {
+	m.mu.Lock()
 	m.registerCalled++
+	revision := m.registerCalled
+	m.mu.Unlock()
 	return &ecs.RegisterTaskDefinitionOutput{
 		TaskDefinition: &ecsTypes.TaskDefinition{
-			TaskDefinitionArn: aws.String(fmt.Sprintf("arn:aws:ecs:us-east-1:123:task-definition/%s:%d", aws.ToString(input.Family), m.registerCalled)),
+			TaskDefinitionArn: aws.String(fmt.Sprintf("arn:aws:ecs:us-east-1:123:task-definition/%s:%d", aws.ToString(input.Family), revision)),
 			Family:            input.Family,
-			Revision:          int32(m.registerCalled),
+			Revision:          int32(revision),
 		},
 	}, nil
 }
 
 func (m *mockECSRegistrar) DeregisterTaskDefinition(_ context.Context, input *ecs.DeregisterTaskDefinitionInput, _ ...func(*ecs.Options)) (*ecs.DeregisterTaskDefinitionOutput, error) {
+	m.mu.Lock()
 	m.deregisteredARNs = append(m.deregisteredARNs, aws.ToString(input.TaskDefinition))
+	m.mu.Unlock()
 	return &ecs.DeregisterTaskDefinitionOutput{}, nil
+}
+
+func (m *mockECSRegistrar) deregisteredSnapshot() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.deregisteredARNs))
+	copy(out, m.deregisteredARNs)
+	return out
 }
 
 func (m *mockECSRegistrar) ListTaskDefinitions(_ context.Context, input *ecs.ListTaskDefinitionsInput, _ ...func(*ecs.Options)) (*ecs.ListTaskDefinitionsOutput, error) {
@@ -460,13 +477,14 @@ memory = 2048
 	drainEvents(events, 500*time.Millisecond)
 
 	var sawAlpha bool
-	for _, arn := range mockECS.deregisteredARNs {
+	deregistered := mockECS.deregisteredSnapshot()
+	for _, arn := range deregistered {
 		if strings.Contains(arn, "alpha") {
 			sawAlpha = true
 		}
 	}
 	if !sawAlpha {
-		t.Fatalf("expected alpha to be deregistered after diff-remove, got %v", mockECS.deregisteredARNs)
+		t.Fatalf("expected alpha to be deregistered after diff-remove, got %v", deregistered)
 	}
 }
 
