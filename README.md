@@ -1,14 +1,15 @@
 # ecs-arc
 
-A Go-based controller that autoscales GitHub Actions self-hosted runners as ECS tasks. It uses the [`actions/scaleset`](https://github.com/actions/scaleset) library to replace the Kubernetes dependency of `actions-runner-controller` with Amazon ECS, supporting EC2 Managed Instances, ECS Anywhere (EXTERNAL), and Fargate Spot launch types.
+A Go-based controller that autoscales GitHub Actions self-hosted runners as ECS tasks. It uses the [`actions/scaleset`](https://github.com/actions/scaleset) library to replace the Kubernetes dependency of `actions-runner-controller` with Amazon ECS, supporting Fargate, Fargate Spot, ECS Anywhere (EXTERNAL), and EC2-backed launch modes (including EC2 Managed Instances via a capacity provider).
 
 ## Prerequisites
 
 - A [GitHub App](https://docs.github.com/en/apps/creating-github-apps) installed on your organization with the following permissions:
   - **Organization permissions**: Self-hosted runners (Read & Write)
-- An AWS account with an ECS cluster
-- ECS task definitions for your runner sizes (the controller reads these at startup)
+- An AWS account with an ECS cluster (the CloudFormation template can create one for you)
 - The official ARC runner image: `ghcr.io/actions/actions-runner`
+
+Runner task definitions are registered and deregistered automatically from the TOML config. You do not need to create them ahead of time.
 
 ## Quick Start
 
@@ -56,7 +57,17 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
-`ControllerLaunchType` only affects how the **controller** itself runs. Runner tasks are configured per-scale-set in the TOML (see step 4) and can independently use `FARGATE`, `FARGATE_SPOT`, `EXTERNAL`, or EC2 Managed Instances.
+`ControllerLaunchType` only affects how the **controller** itself runs. Runner tasks are configured per-scale-set in the TOML (see step 4) and are independent of this setting. Each runner's `compatibility` is one of `FARGATE`, `EC2`, or `EXTERNAL`; Fargate Spot and EC2 Managed Instances are selected by also setting `capacity_provider` on the runner (for example, `compatibility = "FARGATE"` + `capacity_provider = "FARGATE_SPOT"`).
+
+Optional stack parameters you may want to override:
+
+| Parameter | Default | Purpose |
+|---|---|---|
+| `Environment` | `prod` | Prefix for all resource names created by the stack. |
+| `ControllerImageUri` | `ghcr.io/niranjan94/ecs-arc:latest` | Controller container image. Pin to a specific tag for reproducible deploys. |
+| `SSMParameterName` | `/prod/ecs-arc/runners` | Full path of the SSM parameter that holds the TOML runner config. Must start with `/`. |
+| `RunnerExtraLabels` | `""` | Comma-separated GitHub labels added to every runner scale set. |
+| `RunnerLogGroupRetentionDays` | `14` | CloudWatch retention for the runner log group. |
 
 4. Populate the SSM parameter with your runner TOML config. Start from [`deploy/sample-runners.toml`](deploy/sample-runners.toml):
 
@@ -109,6 +120,19 @@ See [`deploy/sample-runners.toml`](deploy/sample-runners.toml) for a working exa
 - `[defaults]` -- baseline applied to every runner (e.g. `compatibility`, `network_mode`, `max_runtime`).
 - `[[runner]]` -- declares a single concrete runner variant.
 - `[[template]]` -- expands `sizes × features` into many runner variants automatically, with optional `[template.exclude]` combinations.
+
+A single one-off runner looks like this:
+
+```toml
+[[runner]]
+family = "runner-gpu"
+cpu = 4096
+memory = 16384
+max_runners = 2
+compatibility = "EC2"
+capacity_provider = "gpu-capacity-provider"
+extra_labels = ["gpu"]
+```
 
 Updating the config source is the only way to add, remove, or resize scale sets at runtime.
 
@@ -287,6 +311,25 @@ Subnets, security groups, and capacity providers are configured per runner in th
 
 ```bash
 go test ./... -v -race
+```
+
+### Utility Scripts
+
+#### delete-scalesets
+
+One-shot utility for deleting GitHub Actions scale sets via the same auth path the controller uses. Useful when you need to clean up stale scale sets that the controller is not going to remove on its own (for example, after renaming `SCALESET_NAME_PREFIX`). Edit the `targets` slice in [`scripts/delete-scalesets/main.go`](scripts/delete-scalesets/main.go) to list the scale set names to delete, then:
+
+```bash
+# List-only (default): shows which scale sets would be deleted.
+go run ./scripts/delete-scalesets \
+  --org my-org \
+  --client-id Iv1.abc123 \
+  --installation-id 12345 \
+  --private-key-file ./private-key.pem
+
+# Actually delete. Only scale sets carrying the `ecs-arc.managed` label are
+# removed; add --skip-managed-check to override that safety net.
+go run ./scripts/delete-scalesets --apply ...
 ```
 
 ### Docker
