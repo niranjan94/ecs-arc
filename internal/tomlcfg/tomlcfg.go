@@ -134,7 +134,7 @@ func Parse(data []byte) (*Config, error) {
 
 // Hardcoded defaults for fields not set in [defaults] or per-runner.
 const (
-	defaultRunnerImage   = "ghcr.io/actions/actions-runner:latest"
+	defaultRunnerImage   = "ghcr.io/niranjan94/ecs-arc-runner:latest"
 	defaultDindImage     = "docker:dind"
 	defaultCompatibility = "FARGATE"
 	defaultNetworkMode   = "awsvpc"

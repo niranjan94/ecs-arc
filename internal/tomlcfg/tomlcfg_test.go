@@ -275,7 +275,7 @@ memory = 2048
 	if r.OS != "LINUX" {
 		t.Errorf("OS = %q, want LINUX (hardcoded default)", r.OS)
 	}
-	if r.RunnerImage != "ghcr.io/actions/actions-runner:latest" {
+	if r.RunnerImage != "ghcr.io/niranjan94/ecs-arc-runner:latest" {
 		t.Errorf("RunnerImage = %q, want default", r.RunnerImage)
 	}
 	if r.DindImage != "docker:dind" {
