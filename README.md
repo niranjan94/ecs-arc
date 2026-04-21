@@ -7,7 +7,7 @@ A Go-based controller that autoscales GitHub Actions self-hosted runners as ECS 
 - A [GitHub App](https://docs.github.com/en/apps/creating-github-apps) installed on your organization with the following permissions:
   - **Organization permissions**: Self-hosted runners (Read & Write)
 - An AWS account with an ECS cluster (the CloudFormation template can create one for you)
-- The official ARC runner image: `ghcr.io/actions/actions-runner`
+- A runner container image. ecs-arc defaults to `ghcr.io/niranjan94/ecs-arc-runner:latest`, a downstream of the official `ghcr.io/actions/actions-runner` with `git`, `zstd`, `jq`, `gh`, `yq` and other common CLI tools pre-installed so stock GitHub-published actions work out of the box. See [`runner/README.md`](runner/README.md) for what is in it, why it exists, and how to use your own image instead.
 
 Runner task definitions are registered and deregistered automatically from the TOML config. You do not need to create them ahead of time.
 
