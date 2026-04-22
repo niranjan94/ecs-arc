@@ -16,6 +16,7 @@ import (
 	"github.com/actions/scaleset/listener"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	ecsTypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
+	"github.com/google/go-github/v61/github"
 	"github.com/niranjan94/ecs-arc/internal/config"
 	"github.com/niranjan94/ecs-arc/internal/reconciler"
 	"github.com/niranjan94/ecs-arc/internal/runner"
@@ -66,15 +67,17 @@ type ScaleSetClient interface {
 type Controller struct {
 	cfg       *config.Config
 	ecsClient *ecs.Client
+	ghClient  *github.Client
 	source    reconciler.ConfigSource
 	logger    *slog.Logger
 }
 
 // New creates a new Controller. source is the TOML config source the reconciler will poll.
-func New(cfg *config.Config, ecsClient *ecs.Client, source reconciler.ConfigSource, logger *slog.Logger) *Controller {
+func New(cfg *config.Config, ecsClient *ecs.Client, ghClient *github.Client, source reconciler.ConfigSource, logger *slog.Logger) *Controller {
 	return &Controller{
 		cfg:       cfg,
 		ecsClient: ecsClient,
+		ghClient:  ghClient,
 		source:    source,
 		logger:    logger,
 	}

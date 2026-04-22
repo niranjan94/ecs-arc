@@ -5,12 +5,15 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 
+	"github.com/bradleyfalzon/ghinstallation/v2"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/google/go-github/v61/github"
 	"github.com/niranjan94/ecs-arc/internal/config"
 	"github.com/niranjan94/ecs-arc/internal/controller"
 	"github.com/niranjan94/ecs-arc/internal/logging"
@@ -67,7 +70,18 @@ func runController() error {
 		logger.Info("reading runner config from SSM", slog.String("parameter", cfg.SSMParameterName))
 	}
 
-	ctrl := controller.New(cfg, ecsClient, source, logger)
+	itr, err := ghinstallation.New(
+		http.DefaultTransport,
+		cfg.GitHubAppID,
+		cfg.GitHubAppInstallationID,
+		[]byte(cfg.GitHubAppPrivateKey),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to build GitHub App transport: %w", err)
+	}
+	ghClient := github.NewClient(&http.Client{Transport: itr})
+
+	ctrl := controller.New(cfg, ecsClient, ghClient, source, logger)
 
 	return ctrl.Run(ctx)
 }
