@@ -200,6 +200,25 @@ drain:
 		)
 	}
 
+	// Start the layer-3 offline-runner reaper as a backstop to layers 1 and 2.
+	orr := newOfflineRunnerReaper(
+		c.ghClient,
+		scalesetClient,
+		c.cfg.GitHubOrg,
+		func() []string {
+			snapshot := rec.DesiredSnapshot()
+			names := make([]string, 0, len(snapshot))
+			for fam := range snapshot {
+				names = append(names, c.cfg.ScaleSetName(fam))
+			}
+			return names
+		},
+		c.cfg.OfflineRunnerReaperInterval,
+		c.cfg.OfflineRunnerMinAge,
+		c.logger.WithGroup("offline-reaper"),
+	)
+	go orr.Run(ctx)
+
 	// Steady-state loop.
 	for {
 		select {

@@ -16,9 +16,11 @@ type fakeScaleSetClient struct {
 	// allInGroup is what List returns.
 	allInGroup []scaleset.RunnerScaleSet
 
-	createCalls []scaleset.RunnerScaleSet
-	updateCalls []scaleset.RunnerScaleSet
-	deleteCalls []int
+	createCalls       []scaleset.RunnerScaleSet
+	updateCalls       []scaleset.RunnerScaleSet
+	deleteCalls       []int
+	removeRunnerCalls []int64
+	removeRunnerErr   error
 
 	nextID int
 
@@ -101,6 +103,9 @@ func (f *fakeScaleSetClient) GetRunnerByName(_ context.Context, _ string) (*scal
 	panic("GetRunnerByName not used by tests")
 }
 
-func (f *fakeScaleSetClient) RemoveRunner(_ context.Context, _ int64) error {
-	panic("RemoveRunner not used by tests")
+func (f *fakeScaleSetClient) RemoveRunner(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removeRunnerCalls = append(f.removeRunnerCalls, id)
+	return f.removeRunnerErr
 }
