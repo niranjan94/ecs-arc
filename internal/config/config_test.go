@@ -157,6 +157,7 @@ func TestLoad_RequiresExactlyOneSource(t *testing.T) {
 		"GITHUB_APP_CLIENT_ID":       "id",
 		"GITHUB_APP_INSTALLATION_ID": "1",
 		"GITHUB_APP_PRIVATE_KEY":     "key",
+		"GITHUB_APP_ID":              "1234567",
 		"GITHUB_ORG":                 "org",
 		"ECS_CLUSTER":                "cluster",
 		"RUNNER_EXECUTION_ROLE_ARN":  "arn",
@@ -216,10 +217,98 @@ func setAllRequired(t *testing.T) {
 	t.Setenv("GITHUB_APP_CLIENT_ID", "Iv1.abc123")
 	t.Setenv("GITHUB_APP_INSTALLATION_ID", "67890")
 	t.Setenv("GITHUB_APP_PRIVATE_KEY", "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----")
+	t.Setenv("GITHUB_APP_ID", "1234567")
 	t.Setenv("GITHUB_ORG", "my-org")
 	t.Setenv("ECS_CLUSTER", "my-cluster")
 	t.Setenv("SSM_PARAMETER_NAME", "/ecs-arc/runners")
 	t.Setenv("RUNNER_EXECUTION_ROLE_ARN", "arn:aws:iam::123:role/exec")
 	t.Setenv("RUNNER_TASK_ROLE_ARN", "arn:aws:iam::123:role/task")
 	t.Setenv("RUNNER_LOG_GROUP", "/ecs/runners")
+}
+
+func setAllRequiredExceptAppID(t *testing.T) {
+	t.Helper()
+	t.Setenv("GITHUB_APP_CLIENT_ID", "Iv1.abc123")
+	t.Setenv("GITHUB_APP_INSTALLATION_ID", "67890")
+	t.Setenv("GITHUB_APP_PRIVATE_KEY", "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----")
+	t.Setenv("GITHUB_ORG", "my-org")
+	t.Setenv("ECS_CLUSTER", "my-cluster")
+	t.Setenv("SSM_PARAMETER_NAME", "/ecs-arc/runners")
+	t.Setenv("RUNNER_EXECUTION_ROLE_ARN", "arn:aws:iam::123:role/exec")
+	t.Setenv("RUNNER_TASK_ROLE_ARN", "arn:aws:iam::123:role/task")
+	t.Setenv("RUNNER_LOG_GROUP", "/ecs/runners")
+}
+
+func TestLoad_GitHubAppID_Parsed(t *testing.T) {
+	setAllRequired(t)
+	t.Setenv("GITHUB_APP_ID", "9876543")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.GitHubAppID != 9876543 {
+		t.Errorf("GitHubAppID = %d, want 9876543", cfg.GitHubAppID)
+	}
+}
+
+func TestLoad_GitHubAppID_MissingErrors(t *testing.T) {
+	setAllRequiredExceptAppID(t)
+	t.Setenv("GITHUB_APP_ID", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected missing-env error")
+	}
+}
+
+func TestLoad_GitHubAppID_NonNumericErrors(t *testing.T) {
+	setAllRequired(t)
+	t.Setenv("GITHUB_APP_ID", "not-a-number")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
+func TestLoad_OfflineRunnerReaperKnobs_Defaults(t *testing.T) {
+	setAllRequired(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.OfflineRunnerReaperInterval != 30*time.Minute {
+		t.Errorf("default interval = %s, want 30m", cfg.OfflineRunnerReaperInterval)
+	}
+	if cfg.OfflineRunnerMinAge != time.Hour {
+		t.Errorf("default min age = %s, want 1h", cfg.OfflineRunnerMinAge)
+	}
+}
+
+func TestLoad_OfflineRunnerReaperKnobs_Overrides(t *testing.T) {
+	setAllRequired(t)
+	t.Setenv("OFFLINE_RUNNER_REAPER_INTERVAL", "5m")
+	t.Setenv("OFFLINE_RUNNER_MIN_AGE", "10m")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.OfflineRunnerReaperInterval != 5*time.Minute {
+		t.Errorf("interval = %s, want 5m", cfg.OfflineRunnerReaperInterval)
+	}
+	if cfg.OfflineRunnerMinAge != 10*time.Minute {
+		t.Errorf("min age = %s, want 10m", cfg.OfflineRunnerMinAge)
+	}
+}
+
+func TestLoad_OfflineRunnerReaperInterval_InvalidErrors(t *testing.T) {
+	setAllRequired(t)
+	t.Setenv("OFFLINE_RUNNER_REAPER_INTERVAL", "not-a-duration")
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected duration parse error")
+	}
 }

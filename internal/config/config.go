@@ -49,6 +49,18 @@ type Config struct {
 	// RunnerExtraLabels are additional GitHub Actions labels to apply to every
 	// runner scale set. Comma-separated list of label names.
 	RunnerExtraLabels []string
+
+	// GitHubAppID is the numeric GitHub App ID (distinct from the string
+	// GitHubAppClientID). Required for the go-github REST client used by
+	// the offline runner reaper.
+	GitHubAppID int64
+
+	// OfflineRunnerReaperInterval controls how often the controller's backstop
+	// reaper sweeps GitHub for offline runner registrations. Default 30m.
+	OfflineRunnerReaperInterval time.Duration
+	// OfflineRunnerMinAge is the minimum time a runner must be observed
+	// offline before the reaper is allowed to deregister it. Default 1h.
+	OfflineRunnerMinAge time.Duration
 }
 
 // ScaleSetName returns the scale set name for a given task definition family.
@@ -82,6 +94,17 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("GITHUB_APP_INSTALLATION_ID must be an integer: %w", err)
 		}
 		cfg.GitHubAppInstallationID = id
+	}
+
+	appIDStr := os.Getenv("GITHUB_APP_ID")
+	if appIDStr == "" {
+		missing = append(missing, "GITHUB_APP_ID")
+	} else {
+		id, err := strconv.ParseInt(appIDStr, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("GITHUB_APP_ID must be an integer: %w", err)
+		}
+		cfg.GitHubAppID = id
 	}
 
 	cfg.GitHubAppPrivateKey = os.Getenv("GITHUB_APP_PRIVATE_KEY")
@@ -120,6 +143,26 @@ func Load() (*Config, error) {
 		cfg.SSMPollInterval = d
 	} else {
 		cfg.SSMPollInterval = 5 * time.Minute
+	}
+
+	if s := os.Getenv("OFFLINE_RUNNER_REAPER_INTERVAL"); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return nil, fmt.Errorf("OFFLINE_RUNNER_REAPER_INTERVAL must be a valid duration: %w", err)
+		}
+		cfg.OfflineRunnerReaperInterval = d
+	} else {
+		cfg.OfflineRunnerReaperInterval = 30 * time.Minute
+	}
+
+	if s := os.Getenv("OFFLINE_RUNNER_MIN_AGE"); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return nil, fmt.Errorf("OFFLINE_RUNNER_MIN_AGE must be a valid duration: %w", err)
+		}
+		cfg.OfflineRunnerMinAge = d
+	} else {
+		cfg.OfflineRunnerMinAge = time.Hour
 	}
 
 	cfg.RunnerExecutionRoleARN = os.Getenv("RUNNER_EXECUTION_ROLE_ARN")
