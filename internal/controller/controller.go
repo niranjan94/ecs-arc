@@ -303,6 +303,8 @@ func (c *Controller) runScaleSet(
 		return fmt.Errorf("failed to create listener: %w", err)
 	}
 
+	state := runner.NewState()
+
 	s := scalerPkg.NewECSScaler(
 		scalesetClient,
 		ecsRunner,
@@ -310,16 +312,17 @@ func (c *Controller) runScaleSet(
 		scaleSetName,
 		taskDefFamily,
 		info.Config,
+		state,
 		logger.WithGroup("scaler"),
 	)
 
 	// Start stale runner reaper
 	reaper := runner.NewReaper(
 		c.ecsClient,
-		nil, // ssClient: wired in Task 3
+		scalesetClient,
 		c.cfg.ECSCluster, scaleSetName,
 		info.Config.MaxRuntime, 5*time.Minute,
-		nil, // state: wired in Task 3
+		state,
 		logger.WithGroup("reaper"),
 	)
 	go reaper.Run(ctx, 30*time.Second)

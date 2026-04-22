@@ -51,12 +51,13 @@ func NewECSScaler(
 	scaleSetName string,
 	taskDefFamily string,
 	config taskdef.ScaleSetConfig,
+	state *runner.State,
 	logger *slog.Logger,
 ) *ECSScaler {
 	return &ECSScaler{
 		client:        client,
 		runner:        taskRunner,
-		state:         runner.NewState(),
+		state:         state,
 		scaleSetID:    scaleSetID,
 		scaleSetName:  scaleSetName,
 		taskDefFamily: taskDefFamily,
