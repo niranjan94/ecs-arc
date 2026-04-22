@@ -35,10 +35,12 @@ func TestReaper_StopsPendingTasks(t *testing.T) {
 
 	r := &Reaper{
 		client:         mock,
+		ssClient:       nil,
 		cluster:        "test-cluster",
 		scaleSetName:   "test-set",
 		maxRuntime:     6 * time.Hour,
 		pendingTimeout: 5 * time.Minute,
+		state:          NewState(),
 		logger:         slog.Default(),
 	}
 
@@ -75,10 +77,12 @@ func TestReaper_StopsOverMaxRuntime(t *testing.T) {
 
 	r := &Reaper{
 		client:         mock,
+		ssClient:       nil,
 		cluster:        "test-cluster",
 		scaleSetName:   "test-set",
 		maxRuntime:     6 * time.Hour,
 		pendingTimeout: 5 * time.Minute,
+		state:          NewState(),
 		logger:         slog.Default(),
 	}
 
@@ -115,10 +119,12 @@ func TestReaper_IgnoresHealthyTasks(t *testing.T) {
 
 	r := &Reaper{
 		client:         mock,
+		ssClient:       nil,
 		cluster:        "test-cluster",
 		scaleSetName:   "test-set",
 		maxRuntime:     6 * time.Hour,
 		pendingTimeout: 5 * time.Minute,
+		state:          NewState(),
 		logger:         slog.Default(),
 	}
 

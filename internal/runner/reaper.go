@@ -6,10 +6,20 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/actions/scaleset"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	ecsTypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 )
+
+// ScaleSetClient is the subset of the scaleset API the Reaper uses to
+// deregister GitHub runner registrations when the ECS task they back has
+// stopped. It is a local copy of the interface shape used by
+// internal/scaler, duplicated to avoid an import cycle.
+type ScaleSetClient interface {
+	GetRunnerByName(ctx context.Context, name string) (*scaleset.RunnerReference, error)
+	RemoveRunner(ctx context.Context, runnerID int64) error
+}
 
 // Reaper periodically checks for stale runner tasks and stops them.
 // It handles two cases:
@@ -17,21 +27,32 @@ import (
 //   - Tasks running longer than the configured max runtime
 type Reaper struct {
 	client         ECSClient
+	ssClient       ScaleSetClient
 	cluster        string
 	scaleSetName   string
 	maxRuntime     time.Duration
 	pendingTimeout time.Duration
+	state          *State
 	logger         *slog.Logger
 }
 
 // NewReaper creates a new Reaper.
-func NewReaper(client ECSClient, cluster, scaleSetName string, maxRuntime, pendingTimeout time.Duration, logger *slog.Logger) *Reaper {
+func NewReaper(
+	client ECSClient,
+	ssClient ScaleSetClient,
+	cluster, scaleSetName string,
+	maxRuntime, pendingTimeout time.Duration,
+	state *State,
+	logger *slog.Logger,
+) *Reaper {
 	return &Reaper{
 		client:         client,
+		ssClient:       ssClient,
 		cluster:        cluster,
 		scaleSetName:   scaleSetName,
 		maxRuntime:     maxRuntime,
 		pendingTimeout: pendingTimeout,
+		state:          state,
 		logger:         logger,
 	}
 }

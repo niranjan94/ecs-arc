@@ -315,8 +315,11 @@ func (c *Controller) runScaleSet(
 
 	// Start stale runner reaper
 	reaper := runner.NewReaper(
-		c.ecsClient, c.cfg.ECSCluster, scaleSetName,
+		c.ecsClient,
+		nil, // ssClient: wired in Task 3
+		c.cfg.ECSCluster, scaleSetName,
 		info.Config.MaxRuntime, 5*time.Minute,
+		nil, // state: wired in Task 3
 		logger.WithGroup("reaper"),
 	)
 	go reaper.Run(ctx, 30*time.Second)
