@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -115,6 +116,12 @@ func (r *Reaper) Sweep(ctx context.Context) (int, error) {
 		}
 
 		status := aws.ToString(task.LastStatus)
+
+		if status == "STOPPED" {
+			r.deregisterStoppedRunner(ctx, &task)
+			continue
+		}
+
 		age := now.Sub(*task.CreatedAt)
 
 		var reason string
@@ -159,4 +166,70 @@ func (r *Reaper) isOurTask(task *ecsTypes.Task) bool {
 		}
 	}
 	return false
+}
+
+// tagValue returns the value of the first task tag with the given key,
+// or an empty string if no such tag exists.
+func tagValue(task *ecsTypes.Task, key string) string {
+	for _, tag := range task.Tags {
+		if aws.ToString(tag.Key) == key {
+			return aws.ToString(tag.Value)
+		}
+	}
+	return ""
+}
+
+func (r *Reaper) deregisterStoppedRunner(ctx context.Context, task *ecsTypes.Task) {
+	if r.ssClient == nil || r.state == nil {
+		return
+	}
+	runnerName := tagValue(task, "ecs-arc:runner-name")
+	if runnerName == "" {
+		return
+	}
+	if r.state.IsDeregistered(runnerName) {
+		return
+	}
+
+	ref, err := r.ssClient.GetRunnerByName(ctx, runnerName)
+	if err != nil {
+		r.logger.Warn("failed to look up runner for deregistration",
+			slog.String("runner_name", runnerName),
+			slog.String("scale_set", r.scaleSetName),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	if ref == nil {
+		r.state.MarkDeregistered(runnerName)
+		return
+	}
+
+	if err := r.ssClient.RemoveRunner(ctx, int64(ref.ID)); err != nil {
+		if errors.Is(err, scaleset.JobStillRunningError) {
+			r.logger.Info("runner still reports a running job, skipping deregister",
+				slog.String("runner_name", runnerName),
+				slog.Int("runner_id", ref.ID),
+			)
+			return
+		}
+		if errors.Is(err, scaleset.RunnerNotFoundError) {
+			r.state.MarkDeregistered(runnerName)
+			return
+		}
+		r.logger.Warn("failed to deregister stopped runner",
+			slog.String("runner_name", runnerName),
+			slog.Int("runner_id", ref.ID),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	r.logger.Info("deregistered runner on task stop",
+		slog.String("runner_name", runnerName),
+		slog.Int("runner_id", ref.ID),
+		slog.String("scale_set", r.scaleSetName),
+		slog.String("event", "runner_deregistered"),
+	)
+	r.state.MarkDeregistered(runnerName)
 }
