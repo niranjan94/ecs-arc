@@ -34,6 +34,7 @@ aws cloudformation deploy \
   --parameter-overrides \
     ControllerLaunchType=EXTERNAL \
     GitHubAppClientId=Iv1.abc123 \
+    GitHubAppId=1234567 \
     GitHubAppInstallationId=12345 \
     GitHubAppPrivateKeyArn=arn:aws:secretsmanager:us-east-1:123456789:secret:gh-app-key-AbCdEf \
     GitHubOrg=my-org \
@@ -49,6 +50,7 @@ aws cloudformation deploy \
   --stack-name ecs-arc \
   --parameter-overrides \
     GitHubAppClientId=Iv1.abc123 \
+    GitHubAppId=1234567 \
     GitHubAppInstallationId=12345 \
     GitHubAppPrivateKeyArn=arn:aws:secretsmanager:us-east-1:123456789:secret:gh-app-key-AbCdEf \
     GitHubOrg=my-org \
@@ -98,6 +100,7 @@ The CloudFormation template sets all of these on the controller task. Only set t
 | Variable | Required | Description |
 |---|---|---|
 | `GITHUB_APP_CLIENT_ID` | Yes | GitHub App Client ID |
+| `GITHUB_APP_ID` | Yes | Numeric GitHub App ID (distinct from `GITHUB_APP_CLIENT_ID`, which is the `Iv23li...` string identifier). Shown as "App ID" at the top of the GitHub App settings page. |
 | `GITHUB_APP_INSTALLATION_ID` | Yes | GitHub App Installation ID |
 | `GITHUB_APP_PRIVATE_KEY` | Yes | PEM-encoded GitHub App private key |
 | `GITHUB_ORG` | Yes | GitHub organization name |
@@ -110,6 +113,8 @@ The CloudFormation template sets all of these on the controller task. Only set t
 | `RUNNER_LOG_GROUP` | Yes | CloudWatch log group for runner containers |
 | `RUNNER_EXTRA_LABELS` | No | Comma-separated extra GitHub labels applied to every scale set |
 | `SCALESET_NAME_PREFIX` | No | Prefix for scale set names (e.g. `prod` -> `prod-runner-small`). Changes the GitHub label, not the ECS task definition family. |
+| `OFFLINE_RUNNER_REAPER_INTERVAL` | No | How often the controller sweeps GitHub for stale runner registrations (default `30m`). |
+| `OFFLINE_RUNNER_MIN_AGE` | No | Minimum time a runner must be observed offline before it is deregistered (default `1h`). |
 
 ### TOML Runner Configuration
 
@@ -276,6 +281,16 @@ runs-on: prod-runner-small
 
 Without a prefix, the family name is used directly as the label.
 
+### Runner registration cleanup
+
+ecs-arc aggressively keeps GitHub's runner registrations in sync with actual ECS runner lifetime. Three layers work together:
+
+1. **On job completion:** the scaler calls `RemoveRunner` for the runner that just finished, using the ID reported in the listener's `JobCompleted` message. Handles the common case with minimal latency.
+2. **On task stop:** the per-scale-set reaper (already polling ECS every 30s) looks at tasks it observes in `STOPPED` state, resolves their runner name from the `ecs-arc:runner-name` task tag, and deregisters via `GetRunnerByName`+`RemoveRunner`. Covers crashes, reaper-killed tasks, and lost listener sessions.
+3. **Global sweep:** a controller-owned goroutine lists org runners via the GitHub REST API every `OFFLINE_RUNNER_REAPER_INTERVAL` (default 30m) and deregisters any that have been `offline` for at least `OFFLINE_RUNNER_MIN_AGE` (default 1h) and whose name matches a currently-desired scale set. Backstop for runners missed by layers 1 and 2, pre-existing orphans, and scale sets deleted from TOML.
+
+All three layers treat 404 (`RunnerNotFoundError`) as success and skip `JobStillRunningError` (never force-deregister a busy runner).
+
 ## Development
 
 ### Building
@@ -288,6 +303,7 @@ go build ./cmd/ecs-arc
 
 ```bash
 export GITHUB_APP_CLIENT_ID=Iv1.abc123
+export GITHUB_APP_ID=1234567
 export GITHUB_APP_INSTALLATION_ID=12345
 export GITHUB_APP_PRIVATE_KEY="$(cat path/to/private-key.pem)"
 export GITHUB_ORG=my-org
