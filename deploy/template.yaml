@@ -18,6 +18,27 @@ Parameters:
     Type: String
     Description: GitHub App Installation ID
 
+  GitHubAppId:
+    Type: String
+    Description: >-
+      Numeric GitHub App ID (e.g. 1234567). Different from GitHubAppClientId
+      (which is a string like "Iv23li..."). Find it under Settings > Developer
+      settings > GitHub Apps > (your app) > "App ID" field at the top.
+
+  OfflineRunnerReaperInterval:
+    Type: String
+    Default: ""
+    Description: >-
+      How often the controller sweeps stale GitHub runner registrations.
+      Go duration string (e.g. "30m", "1h"). Leave empty for default (30m).
+
+  OfflineRunnerMinAge:
+    Type: String
+    Default: ""
+    Description: >-
+      Minimum time a runner must be observed offline before it is eligible
+      for deregistration. Go duration string. Leave empty for default (1h).
+
   GitHubAppPrivateKeyArn:
     Type: String
     Description: ARN of the Secrets Manager secret containing the GitHub App private key
@@ -84,6 +105,8 @@ Conditions:
   HasPrivateSubnets: !Not [!Equals [!Ref PrivateSubnetIds, ""]]
   HasSecurityGroup: !Not [!Equals [!Ref ServiceSecurityGroupId, ""]]
   HasRunnerExtraLabels: !Not [!Equals [!Ref RunnerExtraLabels, ""]]
+  HasOfflineRunnerReaperInterval: !Not [!Equals [!Ref OfflineRunnerReaperInterval, ""]]
+  HasOfflineRunnerMinAge: !Not [!Equals [!Ref OfflineRunnerMinAge, ""]]
 
 Resources:
   # --- ECS Cluster ---
@@ -246,6 +269,8 @@ Resources:
               Value: !Ref GitHubAppClientId
             - Name: GITHUB_APP_INSTALLATION_ID
               Value: !Ref GitHubAppInstallationId
+            - Name: GITHUB_APP_ID
+              Value: !Ref GitHubAppId
             - Name: GITHUB_ORG
               Value: !Ref GitHubOrg
             - Name: ECS_CLUSTER
@@ -265,6 +290,16 @@ Resources:
               - HasRunnerExtraLabels
               - Name: RUNNER_EXTRA_LABELS
                 Value: !Ref RunnerExtraLabels
+              - !Ref "AWS::NoValue"
+            - !If
+              - HasOfflineRunnerReaperInterval
+              - Name: OFFLINE_RUNNER_REAPER_INTERVAL
+                Value: !Ref OfflineRunnerReaperInterval
+              - !Ref "AWS::NoValue"
+            - !If
+              - HasOfflineRunnerMinAge
+              - Name: OFFLINE_RUNNER_MIN_AGE
+                Value: !Ref OfflineRunnerMinAge
               - !Ref "AWS::NoValue"
           Secrets:
             - Name: GITHUB_APP_PRIVATE_KEY
