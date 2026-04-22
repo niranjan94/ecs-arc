@@ -2,6 +2,7 @@ package runner
 
 import (
 	"testing"
+	"time"
 )
 
 func TestState_AddAndCount(t *testing.T) {
@@ -56,5 +57,38 @@ func TestState_MarkDone_Unknown(t *testing.T) {
 	taskARN := s.MarkDone("nonexistent")
 	if taskARN != "" {
 		t.Errorf("MarkDone(unknown) = %q, want empty string", taskARN)
+	}
+}
+
+func TestState_MarkDeregistered_IsDeregistered(t *testing.T) {
+	s := NewState()
+	if s.IsDeregistered("r1") {
+		t.Fatal("fresh state should not mark r1 deregistered")
+	}
+	s.MarkDeregistered("r1")
+	if !s.IsDeregistered("r1") {
+		t.Fatal("MarkDeregistered should make IsDeregistered return true")
+	}
+	if s.IsDeregistered("r2") {
+		t.Fatal("IsDeregistered should not false-positive for other names")
+	}
+}
+
+func TestState_Deregistered_ExpiresAfterTTL(t *testing.T) {
+	s := NewState()
+	s.MarkDeregistered("r1")
+	// Force-age the entry.
+	s.mu.Lock()
+	s.deregistered["r1"] = time.Now().Add(-2 * deregisteredTTL)
+	s.mu.Unlock()
+	if s.IsDeregistered("r1") {
+		t.Fatal("expired entry should not report deregistered")
+	}
+	// And the prune should have removed it.
+	s.mu.Lock()
+	_, present := s.deregistered["r1"]
+	s.mu.Unlock()
+	if present {
+		t.Fatal("expired entry should have been pruned on read")
 	}
 }
