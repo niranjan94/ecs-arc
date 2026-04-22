@@ -2,6 +2,7 @@ package scaler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"testing"
@@ -15,6 +16,7 @@ type mockScaleSetClient struct {
 	jitConfig     *scaleset.RunnerScaleSetJitRunnerConfig
 	jitErr        error
 	removedRunner int64
+	removeCalls   []int64
 	removeErr     error
 	getRunnerRef  *scaleset.RunnerReference
 	getRunnerErr  error
@@ -30,6 +32,7 @@ func (m *mockScaleSetClient) GetRunnerByName(_ context.Context, _ string) (*scal
 
 func (m *mockScaleSetClient) RemoveRunner(_ context.Context, runnerID int64) error {
 	m.removedRunner = runnerID
+	m.removeCalls = append(m.removeCalls, runnerID)
 	return m.removeErr
 }
 
@@ -212,7 +215,9 @@ func TestHandleJobStarted(t *testing.T) {
 
 func TestHandleJobCompleted(t *testing.T) {
 	s := &ECSScaler{
+		client: &mockScaleSetClient{},
 		state:  runner.NewState(),
+		runner: &mockTaskRunner{},
 		logger: slog.Default(),
 	}
 	s.state.AddIdle("test-runner", "arn-1")
@@ -227,5 +232,102 @@ func TestHandleJobCompleted(t *testing.T) {
 	}
 	if s.state.Count() != 0 {
 		t.Error("runner should have been removed from tracking")
+	}
+}
+
+func TestHandleJobCompleted_CallsRemoveRunner(t *testing.T) {
+	mockClient := &mockScaleSetClient{}
+	s := &ECSScaler{
+		client:       mockClient,
+		runner:       &mockTaskRunner{},
+		state:        runner.NewState(),
+		scaleSetID:   1,
+		scaleSetName: "prod-runner-small",
+		logger:       slog.Default(),
+	}
+	s.state.AddIdle("test-runner", "arn-1")
+	s.state.MarkBusy("test-runner")
+
+	err := s.HandleJobCompleted(context.Background(), &scaleset.JobCompleted{
+		RunnerID:       99,
+		RunnerName:     "test-runner",
+		JobMessageBase: scaleset.JobMessageBase{JobID: "job-1"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := mockClient.removeCalls; len(got) != 1 || got[0] != 99 {
+		t.Errorf("RemoveRunner calls = %v, want [99]", got)
+	}
+	if !s.state.IsDeregistered("test-runner") {
+		t.Error("state should mark test-runner deregistered")
+	}
+}
+
+func TestHandleJobCompleted_NotFound_MarksDeregistered(t *testing.T) {
+	mockClient := &mockScaleSetClient{removeErr: scaleset.RunnerNotFoundError}
+	s := &ECSScaler{
+		client: mockClient,
+		runner: &mockTaskRunner{},
+		state:  runner.NewState(),
+		logger: slog.Default(),
+	}
+
+	err := s.HandleJobCompleted(context.Background(), &scaleset.JobCompleted{
+		RunnerID:   5,
+		RunnerName: "runner-x",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !s.state.IsDeregistered("runner-x") {
+		t.Error("404 should be treated as success for dedup")
+	}
+}
+
+func TestHandleJobCompleted_JobStillRunning_DoesNotMark(t *testing.T) {
+	mockClient := &mockScaleSetClient{removeErr: scaleset.JobStillRunningError}
+	s := &ECSScaler{
+		client: mockClient,
+		runner: &mockTaskRunner{},
+		state:  runner.NewState(),
+		logger: slog.Default(),
+	}
+
+	err := s.HandleJobCompleted(context.Background(), &scaleset.JobCompleted{
+		RunnerID:   5,
+		RunnerName: "runner-x",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.state.IsDeregistered("runner-x") {
+		t.Error("JobStillRunning should not mark state deregistered")
+	}
+}
+
+func TestHandleJobCompleted_OtherError_StateUnchanged(t *testing.T) {
+	mockClient := &mockScaleSetClient{removeErr: errors.New("boom")}
+	s := &ECSScaler{
+		client: mockClient,
+		runner: &mockTaskRunner{},
+		state:  runner.NewState(),
+		logger: slog.Default(),
+	}
+	s.state.AddIdle("runner-x", "arn-1")
+	s.state.MarkBusy("runner-x")
+
+	err := s.HandleJobCompleted(context.Background(), &scaleset.JobCompleted{
+		RunnerID:   5,
+		RunnerName: "runner-x",
+	})
+	if err != nil {
+		t.Fatalf("HandleJobCompleted should not propagate inner errors: %v", err)
+	}
+	if s.state.IsDeregistered("runner-x") {
+		t.Error("generic error must not mark deregistered")
+	}
+	if s.state.Count() != 0 {
+		t.Error("MarkDone should still have happened regardless of deregister outcome")
 	}
 }

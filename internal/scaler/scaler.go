@@ -5,6 +5,7 @@ package scaler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -124,7 +125,42 @@ func (s *ECSScaler) HandleJobCompleted(ctx context.Context, jobInfo *scaleset.Jo
 		slog.String("event", "job_completed"),
 	)
 	s.state.MarkDone(jobInfo.RunnerName)
+	s.deregisterCompletedRunner(ctx, jobInfo.RunnerName, int64(jobInfo.RunnerID))
 	return nil
+}
+
+func (s *ECSScaler) deregisterCompletedRunner(ctx context.Context, name string, id int64) {
+	if name == "" || id == 0 {
+		return
+	}
+	if s.state.IsDeregistered(name) {
+		return
+	}
+	if err := s.client.RemoveRunner(ctx, id); err != nil {
+		if errors.Is(err, scaleset.RunnerNotFoundError) {
+			s.state.MarkDeregistered(name)
+			return
+		}
+		if errors.Is(err, scaleset.JobStillRunningError) {
+			s.logger.Info("GitHub still reports runner busy on job completion, skipping eager deregister",
+				slog.String("runner_name", name),
+				slog.Int64("runner_id", id),
+			)
+			return
+		}
+		s.logger.Warn("eager runner deregister failed",
+			slog.String("runner_name", name),
+			slog.Int64("runner_id", id),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	s.logger.Info("deregistered runner on job completion",
+		slog.String("runner_name", name),
+		slog.Int64("runner_id", id),
+		slog.String("event", "runner_deregistered"),
+	)
+	s.state.MarkDeregistered(name)
 }
 
 func (s *ECSScaler) startRunner(ctx context.Context) error {
