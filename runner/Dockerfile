@@ -53,6 +53,16 @@ RUN set -eux; \
     wget -qO /usr/local/bin/yq \
         "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${TARGETARCH}"; \
     chmod +x /usr/local/bin/yq; \
+    case "${TARGETARCH}" in \
+        amd64) AWS_ARCH=x86_64 ;; \
+        arm64) AWS_ARCH=aarch64 ;; \
+        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    wget -qO /tmp/awscliv2.zip \
+        "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip"; \
+    unzip -q /tmp/awscliv2.zip -d /tmp; \
+    /tmp/aws/install; \
+    rm -rf /tmp/awscliv2.zip /tmp/aws; \
     sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen; \
     locale-gen; \
     apt-get clean; \
