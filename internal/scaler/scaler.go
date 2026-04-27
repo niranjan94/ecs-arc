@@ -88,6 +88,17 @@ func (s *ECSScaler) HandleDesiredRunnerCount(ctx context.Context, count int) (in
 		return current, nil
 	}
 
+	if retryAt, blocked := s.capacityBackoffActive(); blocked {
+		s.logger.Info("scale-up deferred: ECS capacity backoff active",
+			slog.String("scale_set", s.scaleSetName),
+			slog.Int("current", current),
+			slog.Int("target", target),
+			slog.Time("retry_at", retryAt),
+			slog.String("event", "scale_up_deferred"),
+		)
+		return current, nil
+	}
+
 	scaleUp := target - current
 	s.logger.Info("scaling up",
 		slog.String("scale_set", s.scaleSetName),
@@ -98,13 +109,27 @@ func (s *ECSScaler) HandleDesiredRunnerCount(ctx context.Context, count int) (in
 	)
 
 	for range scaleUp {
-		if err := s.startRunner(ctx); err != nil {
-			s.logger.Error("failed to start runner",
-				slog.String("scale_set", s.scaleSetName),
-				slog.String("error", err.Error()),
-			)
+		err := s.startRunner(ctx)
+		if err == nil {
+			s.resetCapacityBackoff()
 			continue
 		}
+		if errors.Is(err, runner.ErrTransientCapacity) {
+			wait := s.recordCapacityFailure()
+			s.logger.Warn("ECS capacity unavailable, backing off",
+				slog.String("scale_set", s.scaleSetName),
+				slog.Int("attempted_target", target),
+				slog.Int("started", s.state.Count()),
+				slog.Duration("backoff", wait),
+				slog.String("error", err.Error()),
+				slog.String("event", "scale_up_capacity_backoff"),
+			)
+			break
+		}
+		s.logger.Error("failed to start runner",
+			slog.String("scale_set", s.scaleSetName),
+			slog.String("error", err.Error()),
+		)
 	}
 
 	return s.state.Count(), nil

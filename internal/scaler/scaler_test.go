@@ -407,3 +407,191 @@ func TestCapacityBackoff_ResetClearsState(t *testing.T) {
 		t.Errorf("after reset, first wait = %v, want 15s ±20%% (counter should restart at 1)", wait)
 	}
 }
+
+func TestHandleDesired_BacksOffOnCapacityError(t *testing.T) {
+	mockClient := &mockScaleSetClient{
+		jitConfig: &scaleset.RunnerScaleSetJitRunnerConfig{
+			Runner:           &scaleset.RunnerReference{ID: 1, Name: "test-runner"},
+			EncodedJITConfig: "base64-jit",
+		},
+	}
+	mockRunner := &mockTaskRunner{runTaskErr: runner.ErrTransientCapacity}
+
+	s := &ECSScaler{
+		client:        mockClient,
+		runner:        mockRunner,
+		state:         runner.NewState(),
+		scaleSetID:    1,
+		scaleSetName:  "ss",
+		taskDefFamily: "runner-small",
+		config:        taskdef.ScaleSetConfig{MaxRunners: 10, MinRunners: 0, Subnets: []string{"sn"}, SecurityGroups: []string{"sg"}},
+		logger:        slog.Default(),
+	}
+
+	count, err := s.HandleDesiredRunnerCount(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("count = %d, want 0", count)
+	}
+	if len(mockRunner.runTaskCalls) != 1 {
+		t.Errorf("RunTask called %d times, want 1 (loop should break on first capacity error)", len(mockRunner.runTaskCalls))
+	}
+	if _, blocked := s.capacityBackoffActive(); !blocked {
+		t.Error("expected backoff active after capacity error")
+	}
+}
+
+func TestHandleDesired_GatedDuringBackoff(t *testing.T) {
+	mockClient := &mockScaleSetClient{}
+	mockRunner := &mockTaskRunner{}
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	s := &ECSScaler{
+		client:          mockClient,
+		runner:          mockRunner,
+		state:           runner.NewState(),
+		scaleSetID:      1,
+		scaleSetName:    "ss",
+		taskDefFamily:   "runner-small",
+		config:          taskdef.ScaleSetConfig{MaxRunners: 10, MinRunners: 0},
+		logger:          slog.Default(),
+		nowFn:           func() time.Time { return now },
+		capacityRetryAt: now.Add(30 * time.Second), // backoff active
+	}
+
+	count, err := s.HandleDesiredRunnerCount(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("count = %d, want 0", count)
+	}
+	if len(mockRunner.runTaskCalls) != 0 {
+		t.Errorf("RunTask called %d times during backoff, want 0", len(mockRunner.runTaskCalls))
+	}
+}
+
+func TestHandleDesired_PartialFillThenCapacity(t *testing.T) {
+	mockClient := &mockScaleSetClient{
+		jitConfig: &scaleset.RunnerScaleSetJitRunnerConfig{
+			Runner:           &scaleset.RunnerReference{ID: 1, Name: "test-runner"},
+			EncodedJITConfig: "base64-jit",
+		},
+	}
+	// Custom mock that succeeds twice then returns capacity error.
+	mockRunner := &capacityAfterNTaskRunner{successesBeforeFail: 2}
+
+	s := &ECSScaler{
+		client:        mockClient,
+		runner:        mockRunner,
+		state:         runner.NewState(),
+		scaleSetID:    1,
+		scaleSetName:  "ss",
+		taskDefFamily: "runner-small",
+		config:        taskdef.ScaleSetConfig{MaxRunners: 10, MinRunners: 0, Subnets: []string{"sn"}, SecurityGroups: []string{"sg"}},
+		logger:        slog.Default(),
+	}
+
+	count, err := s.HandleDesiredRunnerCount(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("count = %d, want 2 (partial fill before capacity)", count)
+	}
+	if mockRunner.calls != 3 {
+		t.Errorf("RunTask called %d times, want 3 (2 successes + 1 capacity error then break)", mockRunner.calls)
+	}
+	if _, blocked := s.capacityBackoffActive(); !blocked {
+		t.Error("expected backoff active after capacity error")
+	}
+}
+
+func TestHandleDesired_FirstSuccessResetsBackoff(t *testing.T) {
+	mockClient := &mockScaleSetClient{
+		jitConfig: &scaleset.RunnerScaleSetJitRunnerConfig{
+			Runner:           &scaleset.RunnerReference{ID: 1, Name: "test-runner"},
+			EncodedJITConfig: "base64-jit",
+		},
+	}
+	mockRunner := &mockTaskRunner{}
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	s := &ECSScaler{
+		client:           mockClient,
+		runner:           mockRunner,
+		state:            runner.NewState(),
+		scaleSetID:       1,
+		scaleSetName:     "ss",
+		taskDefFamily:    "runner-small",
+		config:           taskdef.ScaleSetConfig{MaxRunners: 10, MinRunners: 0, Subnets: []string{"sn"}, SecurityGroups: []string{"sg"}},
+		logger:           slog.Default(),
+		nowFn:            func() time.Time { return now },
+		capacityFailures: 3,
+		capacityRetryAt:  now.Add(-1 * time.Second), // window already elapsed
+	}
+
+	count, err := s.HandleDesiredRunnerCount(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+	if s.capacityFailures != 0 {
+		t.Errorf("capacityFailures = %d after success, want 0", s.capacityFailures)
+	}
+	if !s.capacityRetryAt.IsZero() {
+		t.Errorf("capacityRetryAt = %v after success, want zero", s.capacityRetryAt)
+	}
+}
+
+func TestHandleDesired_NonCapacityErrorDoesNotBackOff(t *testing.T) {
+	mockClient := &mockScaleSetClient{
+		jitConfig: &scaleset.RunnerScaleSetJitRunnerConfig{
+			Runner:           &scaleset.RunnerReference{ID: 1, Name: "test-runner"},
+			EncodedJITConfig: "base64-jit",
+		},
+	}
+	mockRunner := &mockTaskRunner{runTaskErr: errors.New("some non-capacity failure")}
+
+	s := &ECSScaler{
+		client:        mockClient,
+		runner:        mockRunner,
+		state:         runner.NewState(),
+		scaleSetID:    1,
+		scaleSetName:  "ss",
+		taskDefFamily: "runner-small",
+		config:        taskdef.ScaleSetConfig{MaxRunners: 10, MinRunners: 0, Subnets: []string{"sn"}, SecurityGroups: []string{"sg"}},
+		logger:        slog.Default(),
+	}
+
+	_, err := s.HandleDesiredRunnerCount(context.Background(), 3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Loop should run all 3 attempts because non-capacity errors continue.
+	if len(mockRunner.runTaskCalls) != 3 {
+		t.Errorf("RunTask called %d times, want 3 (non-capacity errors should not break the loop)", len(mockRunner.runTaskCalls))
+	}
+	if _, blocked := s.capacityBackoffActive(); blocked {
+		t.Error("expected backoff inactive on non-capacity errors")
+	}
+}
+
+// capacityAfterNTaskRunner succeeds the first N times, then returns
+// runner.ErrTransientCapacity for every subsequent call.
+type capacityAfterNTaskRunner struct {
+	successesBeforeFail int
+	calls               int
+}
+
+func (m *capacityAfterNTaskRunner) RunTask(_ context.Context, _ runner.RunTaskInput) (string, error) {
+	m.calls++
+	if m.calls <= m.successesBeforeFail {
+		return fmt.Sprintf("arn:aws:ecs:task/%d", m.calls), nil
+	}
+	return "", runner.ErrTransientCapacity
+}
+
+func (m *capacityAfterNTaskRunner) StopTask(_ context.Context, _, _ string) error { return nil }
