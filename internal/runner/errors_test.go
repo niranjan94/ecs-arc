@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	ecsTypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"github.com/aws/smithy-go"
 )
 
@@ -16,6 +18,58 @@ func (e *fakeAPIError) Error() string                 { return e.code }
 func (e *fakeAPIError) ErrorCode() string             { return e.code }
 func (e *fakeAPIError) ErrorMessage() string          { return e.code }
 func (e *fakeAPIError) ErrorFault() smithy.ErrorFault { return smithy.FaultUnknown }
+
+func TestIsTransientFailureReason(t *testing.T) {
+	tests := []struct {
+		name     string
+		failures []ecsTypes.Failure
+		want     bool
+	}{
+		{"RESOURCE:CPU", failureWith("RESOURCE:CPU"), true},
+		{"RESOURCE:MEMORY", failureWith("RESOURCE:MEMORY"), true},
+		{"RESOURCE:ENI", failureWith("RESOURCE:ENI"), true},
+		{"RESOURCE:PORTS_TCP", failureWith("RESOURCE:PORTS_TCP"), true},
+		{"RESOURCE:PORTS_UDP", failureWith("RESOURCE:PORTS_UDP"), true},
+		{"RESOURCE:PORTS bare", failureWith("RESOURCE:PORTS"), true},
+		{"Capacity is unavailable (Fargate)", failureWith("Capacity is unavailable at this time. Please try again later or in a different availability zone."), true},
+		{"AGENT", failureWith("AGENT"), true},
+		{"EMPTY CAPACITY PROVIDER", failureWith("EMPTY CAPACITY PROVIDER"), true},
+		{"NO ACTIVE INSTANCES", failureWith("NO ACTIVE INSTANCES"), true},
+		{"case insensitive: resource:cpu", failureWith("resource:cpu"), true},
+		{"second failure transient, first not", []ecsTypes.Failure{
+			{Reason: aws.String("MISSING")},
+			{Reason: aws.String("RESOURCE:CPU")},
+		}, true},
+		{"missing role -- not transient", failureWith("Task failed ELB health checks"), false},
+		{"empty list -- not transient", nil, false},
+		{"nil reason -- not transient", []ecsTypes.Failure{{Reason: nil}}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isTransientFailureReason(tc.failures); got != tc.want {
+				t.Errorf("isTransientFailureReason(%v) = %v, want %v", tc.failures, got, tc.want)
+			}
+		})
+	}
+}
+
+func failureWith(reason string) []ecsTypes.Failure {
+	return []ecsTypes.Failure{{
+		Arn:    aws.String("arn:aws:ecs:us-east-1:123:task/x"),
+		Reason: aws.String(reason),
+	}}
+}
+
+func TestJoinFailureReasons(t *testing.T) {
+	got := joinFailureReasons([]ecsTypes.Failure{
+		{Arn: aws.String("a"), Reason: aws.String("RESOURCE:CPU")},
+		{Arn: aws.String("b"), Reason: aws.String("AGENT")},
+	})
+	want := "a: RESOURCE:CPU; b: AGENT; "
+	if got != want {
+		t.Errorf("joinFailureReasons = %q, want %q", got, want)
+	}
+}
 
 func TestIsTransientAPIError(t *testing.T) {
 	tests := []struct {

@@ -5,8 +5,11 @@ package runner
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	ecsTypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"github.com/aws/smithy-go"
 )
 
@@ -28,6 +31,56 @@ var ErrTransientCapacity = errors.New("ecs: transient capacity unavailable")
 var transientAPIErrorCodes = map[string]struct{}{
 	"throttlingexception": {},
 	"serverexception":     {},
+}
+
+// transientFailureReasonSubstrings lists case-insensitive substrings that
+// match documented transient ECS failure reasons.
+//
+// Sources:
+//   - AWS ECS dev guide "API failure reason messages" page documents
+//     RESOURCE:CPU, RESOURCE:MEMORY, RESOURCE:ENI, AGENT,
+//     EMPTY CAPACITY PROVIDER, NO ACTIVE INSTANCES.
+//   - The ECS agent emits RESOURCE:PORTS / RESOURCE:PORTS_TCP /
+//     RESOURCE:PORTS_UDP for bridge-mode port collisions; matched via the
+//     RESOURCE:PORTS prefix.
+//   - AWS Knowledge Center documents the Fargate "Capacity is unavailable"
+//     wording.
+var transientFailureReasonSubstrings = []string{
+	"resource:cpu",
+	"resource:memory",
+	"resource:eni",
+	"resource:ports",
+	"capacity is unavailable",
+	"agent",
+	"empty capacity provider",
+	"no active instances",
+}
+
+// isTransientFailureReason reports whether any element of failures has a
+// Reason matching one of the transient substrings (case-insensitive).
+func isTransientFailureReason(failures []ecsTypes.Failure) bool {
+	for _, f := range failures {
+		if f.Reason == nil {
+			continue
+		}
+		reason := strings.ToLower(aws.ToString(f.Reason))
+		for _, sub := range transientFailureReasonSubstrings {
+			if strings.Contains(reason, sub) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// joinFailureReasons formats a list of ECS failures as "<arn>: <reason>; "
+// concatenated, preserving the format the previous inline code produced.
+func joinFailureReasons(failures []ecsTypes.Failure) string {
+	var b strings.Builder
+	for _, f := range failures {
+		fmt.Fprintf(&b, "%s: %s; ", aws.ToString(f.Arn), aws.ToString(f.Reason))
+	}
+	return b.String()
 }
 
 // isTransientAPIError reports whether err is an ECS API error whose code
