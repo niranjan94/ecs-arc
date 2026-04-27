@@ -2,7 +2,9 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -141,5 +143,91 @@ func TestRunTask_NoNetworkConfigForExternal(t *testing.T) {
 	}
 	if mock.lastRunTaskInput.LaunchType != ecsTypes.LaunchTypeExternal {
 		t.Errorf("expected launch type EXTERNAL, got %q", mock.lastRunTaskInput.LaunchType)
+	}
+}
+
+func TestRunTask_WrapsTransientAPIError(t *testing.T) {
+	mock := &mockECSClient{
+		runTaskErr: &fakeAPIError{code: "ThrottlingException"},
+	}
+	r := &ECSRunner{client: mock, cluster: "my-cluster", logger: slog.Default()}
+	_, err := r.RunTask(context.Background(), RunTaskInput{
+		TaskDefinition:   "runner-small",
+		JITConfigEncoded: "jit",
+		RunnerName:       "runner-x",
+		ScaleSetName:     "ss",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrTransientCapacity) {
+		t.Errorf("expected ErrTransientCapacity, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "ThrottlingException") {
+		t.Errorf("expected underlying error visible in message, got %q", err.Error())
+	}
+}
+
+func TestRunTask_DoesNotWrapNonTransientAPIError(t *testing.T) {
+	mock := &mockECSClient{
+		runTaskErr: &fakeAPIError{code: "InvalidParameterException"},
+	}
+	r := &ECSRunner{client: mock, cluster: "my-cluster", logger: slog.Default()}
+	_, err := r.RunTask(context.Background(), RunTaskInput{
+		TaskDefinition: "runner-small", JITConfigEncoded: "jit",
+		RunnerName: "runner-x", ScaleSetName: "ss",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if errors.Is(err, ErrTransientCapacity) {
+		t.Errorf("did not expect ErrTransientCapacity, got %v", err)
+	}
+}
+
+func TestRunTask_WrapsTransientFailureReason(t *testing.T) {
+	mock := &mockECSClient{
+		runTaskOutput: &ecs.RunTaskOutput{
+			Tasks: nil,
+			Failures: []ecsTypes.Failure{
+				{Arn: aws.String("a"), Reason: aws.String("RESOURCE:MEMORY")},
+			},
+		},
+	}
+	r := &ECSRunner{client: mock, cluster: "my-cluster", logger: slog.Default()}
+	_, err := r.RunTask(context.Background(), RunTaskInput{
+		TaskDefinition: "runner-small", JITConfigEncoded: "jit",
+		RunnerName: "runner-x", ScaleSetName: "ss",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrTransientCapacity) {
+		t.Errorf("expected ErrTransientCapacity, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "RESOURCE:MEMORY") {
+		t.Errorf("expected reason visible in message, got %q", err.Error())
+	}
+}
+
+func TestRunTask_DoesNotWrapNonTransientFailureReason(t *testing.T) {
+	mock := &mockECSClient{
+		runTaskOutput: &ecs.RunTaskOutput{
+			Tasks: nil,
+			Failures: []ecsTypes.Failure{
+				{Arn: aws.String("a"), Reason: aws.String("Task failed ELB health checks")},
+			},
+		},
+	}
+	r := &ECSRunner{client: mock, cluster: "my-cluster", logger: slog.Default()}
+	_, err := r.RunTask(context.Background(), RunTaskInput{
+		TaskDefinition: "runner-small", JITConfigEncoded: "jit",
+		RunnerName: "runner-x", ScaleSetName: "ss",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if errors.Is(err, ErrTransientCapacity) {
+		t.Errorf("did not expect ErrTransientCapacity, got %v", err)
 	}
 }

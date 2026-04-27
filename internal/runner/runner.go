@@ -100,15 +100,18 @@ func (r *ECSRunner) RunTask(ctx context.Context, input RunTaskInput) (string, er
 
 	result, err := r.client.RunTask(ctx, ecsInput)
 	if err != nil {
+		if isTransientAPIError(err) {
+			return "", fmt.Errorf("ecs RunTask failed: %w: %s", ErrTransientCapacity, err.Error())
+		}
 		return "", fmt.Errorf("ecs RunTask failed: %w", err)
 	}
 
 	if len(result.Tasks) == 0 {
-		failureReasons := ""
-		for _, f := range result.Failures {
-			failureReasons += fmt.Sprintf("%s: %s; ", aws.ToString(f.Arn), aws.ToString(f.Reason))
+		reasons := joinFailureReasons(result.Failures)
+		if isTransientFailureReason(result.Failures) {
+			return "", fmt.Errorf("no tasks started: %w: %s", ErrTransientCapacity, reasons)
 		}
-		return "", fmt.Errorf("no tasks started: %s", failureReasons)
+		return "", fmt.Errorf("no tasks started: %s", reasons)
 	}
 
 	taskARN := aws.ToString(result.Tasks[0].TaskArn)
