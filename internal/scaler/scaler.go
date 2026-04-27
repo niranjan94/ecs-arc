@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
+	"sync"
+	"time"
 
 	"github.com/actions/scaleset"
 	"github.com/actions/scaleset/listener"
@@ -39,6 +42,11 @@ type ECSScaler struct {
 	taskDefFamily string
 	config        taskdef.ScaleSetConfig
 	logger        *slog.Logger
+
+	backoffMu        sync.Mutex
+	capacityRetryAt  time.Time
+	capacityFailures int
+	nowFn            func() time.Time // unexported test seam; nil in prod -> time.Now
 }
 
 // Verify ECSScaler implements the Scaler interface at compile time.
@@ -161,6 +169,68 @@ func (s *ECSScaler) deregisterCompletedRunner(ctx context.Context, name string, 
 		slog.String("event", "runner_deregistered"),
 	)
 	s.state.MarkDeregistered(name)
+}
+
+// now returns the current time, using nowFn if injected (for tests) or
+// time.Now otherwise.
+func (s *ECSScaler) now() time.Time {
+	if s.nowFn != nil {
+		return s.nowFn()
+	}
+	return time.Now()
+}
+
+// capacityBackoffSchedule lists the base wait per consecutive transient-
+// capacity failure. Index 0 = first failure. Calls beyond the slice length
+// reuse the last entry (cap).
+var capacityBackoffSchedule = []time.Duration{
+	15 * time.Second,
+	30 * time.Second,
+	60 * time.Second,
+	120 * time.Second,
+	300 * time.Second,
+}
+
+// capacityBackoffActive reports whether the scaler is currently inside a
+// capacity-backoff window. The retry time is returned for log fields.
+func (s *ECSScaler) capacityBackoffActive() (time.Time, bool) {
+	s.backoffMu.Lock()
+	defer s.backoffMu.Unlock()
+	if s.capacityRetryAt.IsZero() {
+		return time.Time{}, false
+	}
+	if s.now().Before(s.capacityRetryAt) {
+		return s.capacityRetryAt, true
+	}
+	return s.capacityRetryAt, false
+}
+
+// recordCapacityFailure increments the consecutive-failure counter and
+// schedules the next allowed retry. Returns the wait duration applied
+// (after jitter) for logging.
+func (s *ECSScaler) recordCapacityFailure() time.Duration {
+	s.backoffMu.Lock()
+	defer s.backoffMu.Unlock()
+	s.capacityFailures++
+	idx := s.capacityFailures - 1
+	if idx >= len(capacityBackoffSchedule) {
+		idx = len(capacityBackoffSchedule) - 1
+	}
+	base := capacityBackoffSchedule[idx]
+	// Uniform ±20% jitter.
+	jitterFactor := 0.8 + rand.Float64()*0.4
+	wait := time.Duration(float64(base) * jitterFactor)
+	s.capacityRetryAt = s.now().Add(wait)
+	return wait
+}
+
+// resetCapacityBackoff clears the failure counter and retry timestamp.
+// Called after a successful scale-up.
+func (s *ECSScaler) resetCapacityBackoff() {
+	s.backoffMu.Lock()
+	defer s.backoffMu.Unlock()
+	s.capacityFailures = 0
+	s.capacityRetryAt = time.Time{}
 }
 
 func (s *ECSScaler) startRunner(ctx context.Context) error {

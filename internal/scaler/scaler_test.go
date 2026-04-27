@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/actions/scaleset"
 	"github.com/niranjan94/ecs-arc/internal/runner"
@@ -329,5 +330,80 @@ func TestHandleJobCompleted_OtherError_StateUnchanged(t *testing.T) {
 	}
 	if s.state.Count() != 0 {
 		t.Error("MarkDone should still have happened regardless of deregister outcome")
+	}
+}
+
+func TestCapacityBackoff_InitiallyInactive(t *testing.T) {
+	s := &ECSScaler{logger: slog.Default()}
+	if _, blocked := s.capacityBackoffActive(); blocked {
+		t.Error("expected backoff inactive on a fresh scaler")
+	}
+}
+
+func TestCapacityBackoff_RecordSetsRetryAt(t *testing.T) {
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	s := &ECSScaler{
+		logger: slog.Default(),
+		nowFn:  func() time.Time { return now },
+	}
+	wait := s.recordCapacityFailure()
+	if wait < 12*time.Second || wait > 18*time.Second {
+		t.Errorf("first wait = %v, want 15s ±20%% (12s..18s)", wait)
+	}
+	retryAt, blocked := s.capacityBackoffActive()
+	if !blocked {
+		t.Fatal("expected backoff active after recordCapacityFailure")
+	}
+	if retryAt.Before(now.Add(12*time.Second)) || retryAt.After(now.Add(18*time.Second)) {
+		t.Errorf("retryAt = %v, want now+15s ±20%%", retryAt)
+	}
+}
+
+func TestCapacityBackoff_ScheduleProgression(t *testing.T) {
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	s := &ECSScaler{
+		logger: slog.Default(),
+		nowFn:  func() time.Time { return now },
+	}
+	expected := []time.Duration{15 * time.Second, 30 * time.Second, 60 * time.Second, 120 * time.Second, 300 * time.Second}
+	for i, base := range expected {
+		got := s.recordCapacityFailure()
+		low := time.Duration(float64(base) * 0.8)
+		high := time.Duration(float64(base) * 1.2)
+		if got < low || got > high {
+			t.Errorf("failure #%d: wait = %v, want %v ±20%% (%v..%v)", i+1, got, base, low, high)
+		}
+	}
+}
+
+func TestCapacityBackoff_CapsAtFiveMinutes(t *testing.T) {
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	s := &ECSScaler{
+		logger: slog.Default(),
+		nowFn:  func() time.Time { return now },
+	}
+	for i := 0; i < 10; i++ {
+		got := s.recordCapacityFailure()
+		if got > time.Duration(float64(300*time.Second)*1.2) {
+			t.Errorf("after %d failures: wait = %v, exceeded 300s+20%% cap", i+1, got)
+		}
+	}
+}
+
+func TestCapacityBackoff_ResetClearsState(t *testing.T) {
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	s := &ECSScaler{
+		logger: slog.Default(),
+		nowFn:  func() time.Time { return now },
+	}
+	s.recordCapacityFailure()
+	s.recordCapacityFailure()
+	s.resetCapacityBackoff()
+	if _, blocked := s.capacityBackoffActive(); blocked {
+		t.Error("expected backoff inactive after reset")
+	}
+	wait := s.recordCapacityFailure()
+	if wait < 12*time.Second || wait > 18*time.Second {
+		t.Errorf("after reset, first wait = %v, want 15s ±20%% (counter should restart at 1)", wait)
 	}
 }
