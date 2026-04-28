@@ -287,44 +287,6 @@ func (c *Controller) runScaleSet(
 		hostname = "ecs-arc"
 	}
 
-	var sessionClient *scaleset.MessageSessionClient
-	for attempt := 1; ; attempt++ {
-		sessionClient, err = scalesetClient.MessageSessionClient(ctx, scaleSet.ID, hostname)
-		if err == nil {
-			break
-		}
-		if !strings.Contains(err.Error(), "SessionConflictException") && !strings.Contains(err.Error(), "409 Conflict") {
-			return fmt.Errorf("failed to create message session: %w", err)
-		}
-		if attempt >= 6 {
-			return fmt.Errorf("failed to create message session after %d attempts: %w", attempt, err)
-		}
-		wait := time.Duration(attempt) * 10 * time.Second
-		logger.Warn("session conflict, retrying",
-			slog.Int("attempt", attempt),
-			slog.Duration("backoff", wait),
-		)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(wait):
-		}
-	}
-	defer func() {
-		if err := sessionClient.Close(context.WithoutCancel(ctx)); err != nil {
-			logger.Error("failed to close session client", "error", err)
-		}
-	}()
-
-	l, err := listener.New(sessionClient, listener.Config{
-		ScaleSetID: scaleSet.ID,
-		MaxRunners: info.Config.MaxRunners,
-		Logger:     logger.WithGroup("listener"),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create listener: %w", err)
-	}
-
 	state := runner.NewState()
 
 	s := scalerPkg.NewECSScaler(
@@ -338,7 +300,8 @@ func (c *Controller) runScaleSet(
 		logger.WithGroup("scaler"),
 	)
 
-	// Start stale runner reaper
+	// Start stale runner reaper. Lives across listener reconnects: it
+	// shares state with the scaler and is bound to the per-scale-set ctx.
 	reaper := runner.NewReaper(
 		c.ecsClient,
 		scalesetClient,
@@ -354,7 +317,67 @@ func (c *Controller) runScaleSet(
 		slog.Int("min_runners", info.Config.MinRunners),
 	)
 
-	return l.Run(ctx, s)
+	// The upstream listener can return mid-poll on transient broker errors
+	// (e.g. a 200 OK with an empty body that fails to decode). Wrap session
+	// acquisition + listener.Run in a reconnect loop so a single such error
+	// does not take this scale set offline until the controller restarts.
+	return runListenerWithReconnect(ctx, func(ctx context.Context) error {
+		sessionClient, err := acquireMessageSession(ctx, scalesetClient, scaleSet.ID, hostname, logger)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := sessionClient.Close(context.WithoutCancel(ctx)); err != nil {
+				logger.Error("failed to close session client", "error", err)
+			}
+		}()
+
+		l, err := listener.New(sessionClient, listener.Config{
+			ScaleSetID: scaleSet.ID,
+			MaxRunners: info.Config.MaxRunners,
+			Logger:     logger.WithGroup("listener"),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create listener: %w", err)
+		}
+
+		return l.Run(ctx, s)
+	}, logger, defaultListenerBackoff)
+}
+
+// acquireMessageSession opens a MessageSessionClient, retrying with linear
+// backoff on the upstream 409 SessionConflictException. Non-conflict errors
+// and ctx cancellation return immediately. The bounded retry budget
+// (six attempts) preserves the original startup-path behaviour.
+func acquireMessageSession(
+	ctx context.Context,
+	client ScaleSetClient,
+	scaleSetID int,
+	hostname string,
+	logger *slog.Logger,
+) (*scaleset.MessageSessionClient, error) {
+	for attempt := 1; ; attempt++ {
+		sc, err := client.MessageSessionClient(ctx, scaleSetID, hostname)
+		if err == nil {
+			return sc, nil
+		}
+		if !strings.Contains(err.Error(), "SessionConflictException") && !strings.Contains(err.Error(), "409 Conflict") {
+			return nil, fmt.Errorf("failed to create message session: %w", err)
+		}
+		if attempt >= 6 {
+			return nil, fmt.Errorf("failed to create message session after %d attempts: %w", attempt, err)
+		}
+		wait := time.Duration(attempt) * 10 * time.Second
+		logger.Warn("session conflict, retrying",
+			slog.Int("attempt", attempt),
+			slog.Duration("backoff", wait),
+		)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
 }
 
 // cleanupOrphanScaleSets deletes any ecs-arc-managed scale set in the
