@@ -187,6 +187,7 @@ func (r *Reaper) deregisterStoppedRunner(ctx context.Context, task *ecsTypes.Tas
 	if runnerName == "" {
 		return
 	}
+	r.state.MarkDone(runnerName)
 	if r.state.IsDeregistered(runnerName) {
 		return
 	}

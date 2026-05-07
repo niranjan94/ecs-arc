@@ -337,6 +337,46 @@ func TestReaper_StoppedRunner_JobStillRunning_DoesNotMark(t *testing.T) {
 	}
 }
 
+func TestReaper_StoppedRunner_ClearsTrackedState(t *testing.T) {
+	state := NewState()
+	state.AddIdle("runner-abc", "arn:stopped")
+
+	now := time.Now()
+	recent := now.Add(-30 * time.Second)
+	ecsMock := &mockECSClient{
+		listTasksOutput: &ecs.ListTasksOutput{TaskArns: []string{"arn:stopped"}},
+		describeTaskOutput: &ecs.DescribeTasksOutput{
+			Tasks: []ecsTypes.Task{{
+				TaskArn:    aws.String("arn:stopped"),
+				LastStatus: aws.String("STOPPED"),
+				CreatedAt:  &recent,
+				Tags: []ecsTypes.Tag{
+					{Key: aws.String("ecs-arc:scale-set"), Value: aws.String("test-set")},
+					{Key: aws.String("ecs-arc:runner-name"), Value: aws.String("runner-abc")},
+				},
+			}},
+		},
+	}
+	ssMock := &fakeReaperScaleSetClient{
+		getByNameFn: func(_ context.Context, _ string) (*scaleset.RunnerReference, error) {
+			return nil, nil
+		},
+	}
+	r := &Reaper{
+		client: ecsMock, ssClient: ssMock, state: state,
+		cluster: "c", scaleSetName: "test-set",
+		maxRuntime: time.Hour, pendingTimeout: 5 * time.Minute,
+		logger: slog.Default(),
+	}
+
+	if _, err := r.Sweep(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := state.Count(); got != 0 {
+		t.Errorf("state.Count() after sweep = %d, want 0 (idle entry should be cleared)", got)
+	}
+}
+
 func TestReaper_StoppedRunner_MissingTag_NoAPICalls(t *testing.T) {
 	state := NewState()
 	now := time.Now()
