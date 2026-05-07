@@ -377,6 +377,87 @@ func TestReaper_StoppedRunner_ClearsTrackedState(t *testing.T) {
 	}
 }
 
+func TestReaper_Sweep_ReconcilesOrphanState_WhenECSForgotTask(t *testing.T) {
+	state := NewState()
+	state.AddIdle("runner-zombie", "arn:gone")
+
+	ecsMock := &mockECSClient{
+		listTasksOutput:    &ecs.ListTasksOutput{TaskArns: []string{}},
+		describeTaskOutput: &ecs.DescribeTasksOutput{Tasks: nil},
+	}
+	r := &Reaper{
+		client: ecsMock, ssClient: &fakeReaperScaleSetClient{}, state: state,
+		cluster: "c", scaleSetName: "test-set",
+		maxRuntime: time.Hour, pendingTimeout: 5 * time.Minute,
+		logger: slog.Default(),
+	}
+
+	if _, err := r.Sweep(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := state.Count(); got != 0 {
+		t.Errorf("state.Count() = %d, want 0 (orphan should be reconciled away)", got)
+	}
+}
+
+func TestReaper_Sweep_TreatsListedARNAsObserved_EvenIfDescribeMissed(t *testing.T) {
+	state := NewState()
+	state.AddIdle("runner-listed", "arn:listed")
+
+	ecsMock := &mockECSClient{
+		listTasksOutput:    &ecs.ListTasksOutput{TaskArns: []string{"arn:listed"}},
+		describeTaskOutput: &ecs.DescribeTasksOutput{Tasks: nil},
+	}
+	r := &Reaper{
+		client: ecsMock, ssClient: &fakeReaperScaleSetClient{}, state: state,
+		cluster: "c", scaleSetName: "test-set",
+		maxRuntime: time.Hour, pendingTimeout: 5 * time.Minute,
+		logger: slog.Default(),
+	}
+
+	if _, err := r.Sweep(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := state.Count(); got != 1 {
+		t.Errorf("state.Count() = %d, want 1 (listed ARN must not be orphaned on describe miss)", got)
+	}
+}
+
+func TestReaper_Sweep_LeavesLiveStateAlone(t *testing.T) {
+	state := NewState()
+	state.AddIdle("runner-alive", "arn:running")
+
+	now := time.Now()
+	recent := now.Add(-30 * time.Second)
+	ecsMock := &mockECSClient{
+		listTasksOutput: &ecs.ListTasksOutput{TaskArns: []string{"arn:running"}},
+		describeTaskOutput: &ecs.DescribeTasksOutput{
+			Tasks: []ecsTypes.Task{{
+				TaskArn:    aws.String("arn:running"),
+				LastStatus: aws.String("RUNNING"),
+				CreatedAt:  &recent,
+				Tags: []ecsTypes.Tag{
+					{Key: aws.String("ecs-arc:scale-set"), Value: aws.String("test-set")},
+					{Key: aws.String("ecs-arc:runner-name"), Value: aws.String("runner-alive")},
+				},
+			}},
+		},
+	}
+	r := &Reaper{
+		client: ecsMock, ssClient: &fakeReaperScaleSetClient{}, state: state,
+		cluster: "c", scaleSetName: "test-set",
+		maxRuntime: time.Hour, pendingTimeout: 5 * time.Minute,
+		logger: slog.Default(),
+	}
+
+	if _, err := r.Sweep(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := state.Count(); got != 1 {
+		t.Errorf("state.Count() = %d, want 1 (live entry must not be reconciled)", got)
+	}
+}
+
 func TestReaper_StoppedRunner_MissingTag_NoAPICalls(t *testing.T) {
 	state := NewState()
 	now := time.Now()

@@ -86,7 +86,18 @@ func (r *Reaper) Run(ctx context.Context, interval time.Duration) {
 
 // Sweep checks all tasks for this scale set and stops stale ones.
 // Returns the number of tasks stopped.
+//
+// Sweep also reconciles in-memory runner state against ECS: any tracked
+// runner whose ECS task no longer appears in the cluster is dropped from
+// state. The state snapshot is captured before ListTasks to avoid racing
+// with scaler.startRunner; runners added concurrently are simply deferred
+// to the next sweep.
 func (r *Reaper) Sweep(ctx context.Context) (int, error) {
+	var trackedBeforeList map[string]string
+	if r.state != nil {
+		trackedBeforeList = r.state.Snapshot()
+	}
+
 	listOutput, err := r.client.ListTasks(ctx, &ecs.ListTasksInput{
 		Cluster: aws.String(r.cluster),
 	})
@@ -94,69 +105,101 @@ func (r *Reaper) Sweep(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("failed to list tasks: %w", err)
 	}
 
-	if len(listOutput.TaskArns) == 0 {
-		return 0, nil
-	}
-
-	descOutput, err := r.client.DescribeTasks(ctx, &ecs.DescribeTasksInput{
-		Cluster: aws.String(r.cluster),
-		Tasks:   listOutput.TaskArns,
-		Include: []ecsTypes.TaskField{ecsTypes.TaskFieldTags},
-	})
-	if err != nil {
-		return 0, fmt.Errorf("failed to describe tasks: %w", err)
+	var descOutput *ecs.DescribeTasksOutput
+	if len(listOutput.TaskArns) > 0 {
+		descOutput, err = r.client.DescribeTasks(ctx, &ecs.DescribeTasksInput{
+			Cluster: aws.String(r.cluster),
+			Tasks:   listOutput.TaskArns,
+			Include: []ecsTypes.TaskField{ecsTypes.TaskFieldTags},
+		})
+		if err != nil {
+			return 0, fmt.Errorf("failed to describe tasks: %w", err)
+		}
 	}
 
 	stopped := 0
 	now := time.Now()
-
-	for _, task := range descOutput.Tasks {
-		if !r.isOurTask(&task) {
-			continue
-		}
-
-		status := aws.ToString(task.LastStatus)
-
-		if status == "STOPPED" {
-			r.deregisterStoppedRunner(ctx, &task)
-			continue
-		}
-
-		age := now.Sub(*task.CreatedAt)
-
-		var reason string
-		switch {
-		case status == "PENDING" && age > r.pendingTimeout:
-			reason = fmt.Sprintf("stuck in PENDING for %s (threshold: %s)", age.Round(time.Second), r.pendingTimeout)
-		case status == "RUNNING" && age > r.maxRuntime:
-			reason = fmt.Sprintf("exceeded max runtime %s (running: %s)", r.maxRuntime, age.Round(time.Second))
-		default:
-			continue
-		}
-
-		r.logger.Warn("stopping stale runner task",
-			slog.String("ecs_task_id", aws.ToString(task.TaskArn)),
-			slog.String("status", status),
-			slog.String("reason", reason),
-			slog.String("event", "runner_stopped"),
-		)
-
-		_, err := r.client.StopTask(ctx, &ecs.StopTaskInput{
-			Cluster: aws.String(r.cluster),
-			Task:    task.TaskArn,
-			Reason:  aws.String("ecs-arc: " + reason),
-		})
-		if err != nil {
-			r.logger.Error("failed to stop stale task",
-				slog.String("ecs_task_id", aws.ToString(task.TaskArn)),
-				slog.String("error", err.Error()),
-			)
-			continue
-		}
-		stopped++
+	observedARNs := make(map[string]bool, len(listOutput.TaskArns))
+	for _, arn := range listOutput.TaskArns {
+		observedARNs[arn] = true
 	}
 
+	if descOutput != nil {
+		for _, task := range descOutput.Tasks {
+			observedARNs[aws.ToString(task.TaskArn)] = true
+
+			if !r.isOurTask(&task) {
+				continue
+			}
+
+			status := aws.ToString(task.LastStatus)
+
+			if status == "STOPPED" {
+				r.deregisterStoppedRunner(ctx, &task)
+				continue
+			}
+
+			age := now.Sub(*task.CreatedAt)
+
+			var reason string
+			switch {
+			case status == "PENDING" && age > r.pendingTimeout:
+				reason = fmt.Sprintf("stuck in PENDING for %s (threshold: %s)", age.Round(time.Second), r.pendingTimeout)
+			case status == "RUNNING" && age > r.maxRuntime:
+				reason = fmt.Sprintf("exceeded max runtime %s (running: %s)", r.maxRuntime, age.Round(time.Second))
+			default:
+				continue
+			}
+
+			r.logger.Warn("stopping stale runner task",
+				slog.String("ecs_task_id", aws.ToString(task.TaskArn)),
+				slog.String("status", status),
+				slog.String("reason", reason),
+				slog.String("event", "runner_stopped"),
+			)
+
+			_, err := r.client.StopTask(ctx, &ecs.StopTaskInput{
+				Cluster: aws.String(r.cluster),
+				Task:    task.TaskArn,
+				Reason:  aws.String("ecs-arc: " + reason),
+			})
+			if err != nil {
+				r.logger.Error("failed to stop stale task",
+					slog.String("ecs_task_id", aws.ToString(task.TaskArn)),
+					slog.String("error", err.Error()),
+				)
+				continue
+			}
+			stopped++
+		}
+	}
+
+	r.reconcileOrphanState(trackedBeforeList, observedARNs)
+
 	return stopped, nil
+}
+
+// reconcileOrphanState drops any tracked runners whose ECS task ARN was
+// not observed in the current describe results. ECS purges stopped tasks
+// from its API after roughly an hour; without reconciliation, in-memory
+// state leaks every entry whose task disappears before HandleJobCompleted
+// fires (e.g. a JIT runner that exited without picking up a job).
+func (r *Reaper) reconcileOrphanState(tracked map[string]string, observedARNs map[string]bool) {
+	if r.state == nil {
+		return
+	}
+	for name, arn := range tracked {
+		if observedARNs[arn] {
+			continue
+		}
+		r.state.MarkDone(name)
+		r.logger.Info("reconciled orphan runner state",
+			slog.String("runner_name", name),
+			slog.String("ecs_task_arn", arn),
+			slog.String("scale_set", r.scaleSetName),
+			slog.String("event", "state_orphan_reconciled"),
+		)
+	}
 }
 
 func (r *Reaper) isOurTask(task *ecsTypes.Task) bool {

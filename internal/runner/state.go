@@ -69,6 +69,22 @@ func (s *State) Count() int {
 	return len(s.idle) + len(s.busy)
 }
 
+// Snapshot returns a copy of the tracked runners as a map of name to
+// ECS task ARN, covering both idle and busy runners. Callers may mutate
+// the returned map freely.
+func (s *State) Snapshot() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]string, len(s.idle)+len(s.busy))
+	for name, arn := range s.idle {
+		out[name] = arn
+	}
+	for name, arn := range s.busy {
+		out[name] = arn
+	}
+	return out
+}
+
 // IdleCount returns the number of idle runners.
 func (s *State) IdleCount() int {
 	s.mu.Lock()
