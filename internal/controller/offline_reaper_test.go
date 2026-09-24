@@ -6,11 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 	"time"
 
-	"github.com/google/go-github/v61/github"
+	"github.com/google/go-github/v88/github"
 )
 
 func ptrInt64(v int64) *int64    { return &v }
@@ -85,6 +84,15 @@ func TestShouldDelete_PrefixMatchesTwoSets_PicksEither(t *testing.T) {
 
 // newFakeGitHubServer returns an httptest server serving a fixed runner
 // list on /orgs/:org/actions/runners.
+func newTestGitHubClient(t *testing.T, srv *httptest.Server) *github.Client {
+	t.Helper()
+	gh, err := github.NewClient(github.WithURLs(ptrString(srv.URL+"/"), nil))
+	if err != nil {
+		t.Fatalf("github.NewClient: %v", err)
+	}
+	return gh
+}
+
 func newFakeGitHubServer(t *testing.T, runners []*github.Runner) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -112,9 +120,7 @@ func TestOfflineReaper_Sweep_PromotesAcrossTwoTicks(t *testing.T) {
 	srv := newFakeGitHubServer(t, runners)
 	t.Cleanup(srv.Close)
 
-	gh := github.NewClient(nil)
-	u, _ := url.Parse(srv.URL + "/")
-	gh.BaseURL = u
+	gh := newTestGitHubClient(t, srv)
 
 	ss := newFakeScaleSetClient()
 
@@ -157,9 +163,7 @@ func TestOfflineReaper_Sweep_DeletesOnlyEligible(t *testing.T) {
 	srv := newFakeGitHubServer(t, runners)
 	t.Cleanup(srv.Close)
 
-	gh := github.NewClient(nil)
-	u, _ := url.Parse(srv.URL + "/")
-	gh.BaseURL = u
+	gh := newTestGitHubClient(t, srv)
 	ss := newFakeScaleSetClient()
 
 	base := time.Now()
@@ -189,9 +193,7 @@ func TestOfflineReaper_Sweep_ListError_NoDeletes(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	gh := github.NewClient(nil)
-	u, _ := url.Parse(srv.URL + "/")
-	gh.BaseURL = u
+	gh := newTestGitHubClient(t, srv)
 	ss := newFakeScaleSetClient()
 
 	r := newOfflineRunnerReaper(

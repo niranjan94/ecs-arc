@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/google/go-github/v61/github"
+	"github.com/google/go-github/v88/github"
 )
 
 // runnerNameSuffixPattern matches the 8-lowercase-hex suffix the scaler
@@ -168,7 +168,7 @@ func (r *offlineRunnerReaper) sweep(ctx context.Context) error {
 
 func (r *offlineRunnerReaper) listAllRunners(ctx context.Context) ([]*github.Runner, error) {
 	var all []*github.Runner
-	opts := &github.ListOptions{PerPage: 100}
+	opts := &github.ListRunnersOptions{ListOptions: github.ListOptions{PerPage: 100}}
 	for {
 		page, resp, err := r.ghClient.Actions.ListOrganizationRunners(ctx, r.org, opts)
 		if err != nil {
