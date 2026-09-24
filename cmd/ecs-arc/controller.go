@@ -13,7 +13,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
-	"github.com/google/go-github/v61/github"
+	"github.com/google/go-github/v88/github"
 	"github.com/niranjan94/ecs-arc/internal/config"
 	"github.com/niranjan94/ecs-arc/internal/controller"
 	"github.com/niranjan94/ecs-arc/internal/logging"
@@ -79,7 +79,10 @@ func runController() error {
 	if err != nil {
 		return fmt.Errorf("failed to build GitHub App transport: %w", err)
 	}
-	ghClient := github.NewClient(&http.Client{Transport: itr})
+	ghClient, err := github.NewClient(github.WithTransport(itr))
+	if err != nil {
+		return fmt.Errorf("failed to build GitHub client: %w", err)
+	}
 
 	ctrl := controller.New(cfg, ecsClient, ghClient, source, logger)
 

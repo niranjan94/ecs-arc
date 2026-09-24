@@ -16,7 +16,7 @@ import (
 	"github.com/actions/scaleset/listener"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	ecsTypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
-	"github.com/google/go-github/v61/github"
+	"github.com/google/go-github/v88/github"
 	"github.com/niranjan94/ecs-arc/internal/config"
 	"github.com/niranjan94/ecs-arc/internal/reconciler"
 	"github.com/niranjan94/ecs-arc/internal/runner"
