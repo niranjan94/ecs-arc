@@ -252,7 +252,7 @@ func (c *Controller) runScaleSet(
 
 	desired := &scaleset.RunnerScaleSet{
 		Name:          scaleSetName,
-		RunnerGroupID: 1,
+		RunnerGroupID: c.cfg.RunnerGroupID,
 		Labels:        labels,
 		RunnerSetting: scaleset.RunnerSetting{DisableUpdate: true},
 	}
@@ -393,7 +393,7 @@ func (c *Controller) cleanupOrphanScaleSets(
 		expectedNames[c.cfg.ScaleSetName(fam)] = struct{}{}
 	}
 
-	all, err := ssClient.ListRunnerScaleSets(ctx, 1)
+	all, err := ssClient.ListRunnerScaleSets(ctx, c.cfg.RunnerGroupID)
 	if err != nil {
 		c.logger.Error("scale set sweep: list failed",
 			slog.String("error", err.Error()),
@@ -449,7 +449,7 @@ func (c *Controller) deleteScaleSetIfManaged(
 	ssClient ScaleSetClient,
 	name string,
 ) {
-	ss, err := ssClient.GetRunnerScaleSet(ctx, 1, name)
+	ss, err := ssClient.GetRunnerScaleSet(ctx, c.cfg.RunnerGroupID, name)
 	if err != nil {
 		c.logger.Error("lookup for orphan delete failed",
 			slog.String("scale_set", name),

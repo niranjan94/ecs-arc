@@ -312,3 +312,38 @@ func TestLoad_OfflineRunnerReaperInterval_InvalidErrors(t *testing.T) {
 		t.Fatal("expected duration parse error")
 	}
 }
+
+func TestLoad_RunnerGroupID_DefaultsToOne(t *testing.T) {
+	setAllRequired(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RunnerGroupID != 1 {
+		t.Errorf("RunnerGroupID = %d, want 1", cfg.RunnerGroupID)
+	}
+}
+
+func TestLoad_RunnerGroupID_Override(t *testing.T) {
+	setAllRequired(t)
+	t.Setenv("RUNNER_GROUP_ID", "4")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RunnerGroupID != 4 {
+		t.Errorf("RunnerGroupID = %d, want 4", cfg.RunnerGroupID)
+	}
+}
+
+func TestLoad_RunnerGroupID_InvalidErrors(t *testing.T) {
+	for _, v := range []string{"abc", "0", "-3"} {
+		t.Run(v, func(t *testing.T) {
+			setAllRequired(t)
+			t.Setenv("RUNNER_GROUP_ID", v)
+			if _, err := Load(); err == nil {
+				t.Fatalf("expected error for RUNNER_GROUP_ID=%q", v)
+			}
+		})
+	}
+}

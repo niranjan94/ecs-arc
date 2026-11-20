@@ -22,6 +22,10 @@ type fakeScaleSetClient struct {
 	removeRunnerCalls []int64
 	removeRunnerErr   error
 
+	// Runner group IDs passed to Get and List, in call order.
+	getGroupIDs  []int
+	listGroupIDs []int
+
 	nextID int
 
 	createErr, getErr, updateErr, deleteErr, listErr error
@@ -48,9 +52,10 @@ func (f *fakeScaleSetClient) CreateRunnerScaleSet(_ context.Context, rss *scales
 	return &cp, nil
 }
 
-func (f *fakeScaleSetClient) GetRunnerScaleSet(_ context.Context, _ int, name string) (*scaleset.RunnerScaleSet, error) {
+func (f *fakeScaleSetClient) GetRunnerScaleSet(_ context.Context, runnerGroupID int, name string) (*scaleset.RunnerScaleSet, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.getGroupIDs = append(f.getGroupIDs, runnerGroupID)
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
@@ -80,9 +85,10 @@ func (f *fakeScaleSetClient) DeleteRunnerScaleSet(_ context.Context, id int) err
 	return nil
 }
 
-func (f *fakeScaleSetClient) ListRunnerScaleSets(_ context.Context, _ int) ([]scaleset.RunnerScaleSet, error) {
+func (f *fakeScaleSetClient) ListRunnerScaleSets(_ context.Context, runnerGroupID int) ([]scaleset.RunnerScaleSet, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.listGroupIDs = append(f.listGroupIDs, runnerGroupID)
 	if f.listErr != nil {
 		return nil, f.listErr
 	}

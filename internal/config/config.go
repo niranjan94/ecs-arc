@@ -61,6 +61,11 @@ type Config struct {
 	// OfflineRunnerMinAge is the minimum time a runner must be observed
 	// offline before the reaper is allowed to deregister it. Default 1h.
 	OfflineRunnerMinAge time.Duration
+
+	// RunnerGroupID is the GitHub runner group scale sets are registered in,
+	// listed in by the startup sweep, and looked up in on removal.
+	// RUNNER_GROUP_ID; default 1 (the organization's Default group).
+	RunnerGroupID int
 }
 
 // ScaleSetName returns the scale set name for a given task definition family.
@@ -178,6 +183,15 @@ func Load() (*Config, error) {
 	cfg.RunnerLogGroup = os.Getenv("RUNNER_LOG_GROUP")
 	if cfg.RunnerLogGroup == "" {
 		missing = append(missing, "RUNNER_LOG_GROUP")
+	}
+
+	cfg.RunnerGroupID = 1
+	if s := os.Getenv("RUNNER_GROUP_ID"); s != "" {
+		id, err := strconv.Atoi(s)
+		if err != nil || id < 1 {
+			return nil, fmt.Errorf("RUNNER_GROUP_ID must be a positive integer, got %q", s)
+		}
+		cfg.RunnerGroupID = id
 	}
 
 	if extraLabels := os.Getenv("RUNNER_EXTRA_LABELS"); extraLabels != "" {
