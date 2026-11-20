@@ -10,6 +10,9 @@
 compatibility = "EXTERNAL"
 network_mode = "bridge"
 enable_dind = false
+# How docker-enabled runners get their daemon: "sidecar" (default) or "inline".
+# See "Docker in jobs" in the README.
+# dind_mode = "inline"
 max_runtime = "6h"
 
 [[template]]
