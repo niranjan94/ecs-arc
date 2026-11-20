@@ -119,7 +119,7 @@ func TestDeleteScaleSetIfManaged_DeletesManaged(t *testing.T) {
 		Name:   "runner-gone",
 		Labels: []scaleset.Label{{Name: ManagedLabelName, Type: "System"}},
 	}
-	c := &Controller{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	c := &Controller{cfg: &config.Config{RunnerGroupID: 1}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	c.deleteScaleSetIfManaged(context.Background(), fake, "runner-gone")
 	if len(fake.deleteCalls) != 1 || fake.deleteCalls[0] != 42 {
 		t.Fatalf("expected delete of id=42, got %+v", fake.deleteCalls)
@@ -129,7 +129,7 @@ func TestDeleteScaleSetIfManaged_DeletesManaged(t *testing.T) {
 func TestDeleteScaleSetIfManaged_SkipsUnmanaged(t *testing.T) {
 	fake := newFakeScaleSetClient()
 	fake.byName["foreign"] = &scaleset.RunnerScaleSet{ID: 7, Name: "foreign"}
-	c := &Controller{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	c := &Controller{cfg: &config.Config{RunnerGroupID: 1}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	c.deleteScaleSetIfManaged(context.Background(), fake, "foreign")
 	if len(fake.deleteCalls) != 0 {
 		t.Fatalf("expected no deletes, got %+v", fake.deleteCalls)
@@ -138,10 +138,38 @@ func TestDeleteScaleSetIfManaged_SkipsUnmanaged(t *testing.T) {
 
 func TestDeleteScaleSetIfManaged_MissingIsNoop(t *testing.T) {
 	fake := newFakeScaleSetClient()
-	c := &Controller{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	c := &Controller{cfg: &config.Config{RunnerGroupID: 1}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	c.deleteScaleSetIfManaged(context.Background(), fake, "does-not-exist")
 	if len(fake.deleteCalls) != 0 {
 		t.Fatalf("expected no deletes, got %+v", fake.deleteCalls)
+	}
+}
+
+func TestCleanupOrphanScaleSets_ListsConfiguredRunnerGroup(t *testing.T) {
+	fake := newFakeScaleSetClient()
+	c := &Controller{cfg: &config.Config{RunnerGroupID: 4}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if err := c.cleanupOrphanScaleSets(context.Background(), fake, map[string]struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.listGroupIDs) != 1 || fake.listGroupIDs[0] != 4 {
+		t.Fatalf("expected ListRunnerScaleSets in group 4, got %v", fake.listGroupIDs)
+	}
+}
+
+func TestDeleteScaleSetIfManaged_LooksUpConfiguredRunnerGroup(t *testing.T) {
+	fake := newFakeScaleSetClient()
+	fake.byName["runner-gone"] = &scaleset.RunnerScaleSet{
+		ID:     7,
+		Name:   "runner-gone",
+		Labels: []scaleset.Label{{Name: ManagedLabelName, Type: "System"}},
+	}
+	c := &Controller{cfg: &config.Config{RunnerGroupID: 4}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	c.deleteScaleSetIfManaged(context.Background(), fake, "runner-gone")
+	if len(fake.getGroupIDs) != 1 || fake.getGroupIDs[0] != 4 {
+		t.Fatalf("expected GetRunnerScaleSet in group 4, got %v", fake.getGroupIDs)
+	}
+	if len(fake.deleteCalls) != 1 || fake.deleteCalls[0] != 7 {
+		t.Fatalf("expected delete of id=7, got %+v", fake.deleteCalls)
 	}
 }
 
