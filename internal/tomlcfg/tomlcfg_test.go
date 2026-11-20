@@ -1,6 +1,7 @@
 package tomlcfg
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -1042,4 +1043,99 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func TestResolve_DindMode(t *testing.T) {
+	input := []byte(`
+[defaults]
+compatibility = "EC2"
+network_mode = "bridge"
+enable_dind = true
+dind_mode = "inline"
+
+[[runner]]
+family = "inherits"
+cpu = 1024
+memory = 2048
+
+[[runner]]
+family = "overrides"
+cpu = 1024
+memory = 2048
+dind_mode = "sidecar"
+`)
+	cfg, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resolved, err := Resolve(cfg)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := resolved["inherits"].DindMode; got != DindModeInline {
+		t.Errorf("inherits: DindMode = %q, want inline", got)
+	}
+	if got := resolved["overrides"].DindMode; got != DindModeSidecar {
+		t.Errorf("overrides: DindMode = %q, want sidecar", got)
+	}
+}
+
+func TestResolve_DindModeDefaultsToSidecar(t *testing.T) {
+	cfg, err := Parse([]byte(`
+[[runner]]
+family = "r"
+cpu = 1024
+memory = 2048
+enable_dind = true
+compatibility = "EC2"
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resolved, err := Resolve(cfg)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := resolved["r"].DindMode; got != DindModeSidecar {
+		t.Errorf("DindMode = %q, want sidecar", got)
+	}
+}
+
+func TestResolve_DindModeInvalid(t *testing.T) {
+	cfg, err := Parse([]byte(`
+[[runner]]
+family = "r"
+cpu = 1024
+memory = 2048
+dind_mode = "host"
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if _, err := Resolve(cfg); err == nil || !strings.Contains(err.Error(), "dind_mode") {
+		t.Fatalf("expected a dind_mode error, got %v", err)
+	}
+}
+
+func TestExpandTemplates_FeatureSetsDindMode(t *testing.T) {
+	cfg, err := Parse([]byte(`
+[[template]]
+family_prefix = "runner"
+
+[template.sizes]
+small = { cpu = 1024, memory = 2048 }
+
+[template.features]
+docker = { enable_dind = true, dind_mode = "inline" }
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	expanded, err := ExpandTemplates(cfg)
+	if err != nil {
+		t.Fatalf("ExpandTemplates: %v", err)
+	}
+	if len(expanded) != 1 || expanded[0].DindMode == nil || *expanded[0].DindMode != DindModeInline {
+		t.Fatalf("want one runner with dind_mode inline, got %+v", expanded)
+	}
 }
