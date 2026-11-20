@@ -112,6 +112,7 @@ The CloudFormation template sets all of these on the controller task. Only set t
 | `RUNNER_TASK_ROLE_ARN` | Yes | IAM task role ARN applied to dynamically-registered runner task definitions |
 | `RUNNER_LOG_GROUP` | Yes | CloudWatch log group for runner containers |
 | `RUNNER_EXTRA_LABELS` | No | Comma-separated extra GitHub labels applied to every scale set |
+| `RUNNER_GROUP_ID` | No | Numeric ID of the GitHub runner group the scale sets are registered in (default `1`, the organization's Default group). Use a dedicated group to limit which repositories can use the runners. The ID is the number at the end of the group's URL in organization settings. |
 | `SCALESET_NAME_PREFIX` | No | Prefix for scale set names (e.g. `prod` -> `prod-runner-small`). Changes the GitHub label, not the ECS task definition family. |
 | `OFFLINE_RUNNER_REAPER_INTERVAL` | No | How often the controller sweeps GitHub for stale runner registrations (default `30m`). |
 | `OFFLINE_RUNNER_MIN_AGE` | No | Minimum time a runner must be observed offline before it is deregistered (default `1h`). |

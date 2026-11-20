@@ -85,6 +85,13 @@ Parameters:
       Additional GitHub Actions labels to apply to all runner scale sets,
       comma-separated (e.g. "self-hosted,custom-label").
 
+  RunnerGroupId:
+    Type: String
+    Default: ""
+    Description: >-
+      Numeric ID of the GitHub runner group to register scale sets in.
+      Leave empty for the organization's Default group (1).
+
   RunnerLogGroupRetentionDays:
     Type: Number
     Default: 14
@@ -105,6 +112,7 @@ Conditions:
   HasPrivateSubnets: !Not [!Equals [!Ref PrivateSubnetIds, ""]]
   HasSecurityGroup: !Not [!Equals [!Ref ServiceSecurityGroupId, ""]]
   HasRunnerExtraLabels: !Not [!Equals [!Ref RunnerExtraLabels, ""]]
+  HasRunnerGroupId: !Not [!Equals [!Ref RunnerGroupId, ""]]
   HasOfflineRunnerReaperInterval: !Not [!Equals [!Ref OfflineRunnerReaperInterval, ""]]
   HasOfflineRunnerMinAge: !Not [!Equals [!Ref OfflineRunnerMinAge, ""]]
 
@@ -290,6 +298,11 @@ Resources:
               - HasRunnerExtraLabels
               - Name: RUNNER_EXTRA_LABELS
                 Value: !Ref RunnerExtraLabels
+              - !Ref "AWS::NoValue"
+            - !If
+              - HasRunnerGroupId
+              - Name: RUNNER_GROUP_ID
+                Value: !Ref RunnerGroupId
               - !Ref "AWS::NoValue"
             - !If
               - HasOfflineRunnerReaperInterval
