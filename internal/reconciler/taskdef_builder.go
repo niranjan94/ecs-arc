@@ -48,10 +48,14 @@ func BuildRegisterInput(cfg *tomlcfg.ResolvedRunnerConfig, infra InfraConfig) *e
 		input.RuntimePlatform = rp
 	}
 
-	if cfg.EnableDind {
+	switch {
+	case cfg.EnableDind && cfg.DindMode == tomlcfg.DindModeInline:
+		input.Volumes = []ecsTypes.Volume{{Name: aws.String("docker-data")}}
+		input.ContainerDefinitions = inlineDindContainers(cfg, infra)
+	case cfg.EnableDind:
 		input.Volumes = dindVolumes()
 		input.ContainerDefinitions = dindContainers(cfg, infra)
-	} else {
+	default:
 		input.ContainerDefinitions = standaloneContainers(cfg, infra)
 	}
 
@@ -166,6 +170,54 @@ func dindContainers(cfg *tomlcfg.ResolvedRunnerConfig, infra InfraConfig) []ecsT
 			MountPoints: []ecsTypes.MountPoint{
 				{SourceVolume: aws.String("work"), ContainerPath: aws.String("/home/runner/_work")},
 				{SourceVolume: aws.String("dind-sock"), ContainerPath: aws.String("/var/run")},
+			},
+			LogConfiguration: logConfig(infra, cfg.Family),
+		},
+	}
+}
+
+// inlineDindScript starts dockerd inside the runner container, waits for it,
+// then hands over to the runner. It relies on the runner image shipping dockerd
+// and iptables and granting the runner user passwordless sudo, as the default
+// runner image does.
+const inlineDindScript = `set -e
+# cgroup v2: move this container's processes into a child cgroup and delegate
+# every controller to its children, as moby's hack/dind does. Without it runc
+# fails with "cannot enter cgroupv2 ... in threaded mode" when a job starts a
+# container with resource limits (for example docker compose with mem_limit).
+if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+  sudo sh -c 'mkdir -p /sys/fs/cgroup/init \
+    && xargs -rn1 < /sys/fs/cgroup/cgroup.procs > /sys/fs/cgroup/init/cgroup.procs || true; \
+    sed -e "s/ / +/g" -e "s/^/+/" < /sys/fs/cgroup/cgroup.controllers > /sys/fs/cgroup/cgroup.subtree_control'
+fi
+set +e
+# DOCKERD_ARGS (optional, e.g. set in the runner image) adds dockerd flags such
+# as --registry-mirror.
+sudo dockerd --host=unix:///var/run/docker.sock --group=123 --data-root=/var/lib/docker ${DOCKERD_ARGS:-} >/tmp/dockerd.log 2>&1 &
+for i in $(seq 120); do docker info >/dev/null 2>&1 && break; sleep 1; done
+docker info >/dev/null 2>&1 || { echo "dockerd did not start:"; cat /tmp/dockerd.log; exit 1; }
+exec /home/runner/run.sh`
+
+// inlineDindContainers runs dockerd inside the privileged runner container
+// instead of a sidecar. Job containers then live in the runner's network
+// namespace and see the runner's filesystem, which a sidecar cannot offer in
+// bridge network mode: there every task container has its own namespace, so
+// "services:" are not on the runner's localhost and "docker run -v /tmp/x:..."
+// resolves /tmp/x on the sidecar.
+func inlineDindContainers(cfg *tomlcfg.ResolvedRunnerConfig, infra InfraConfig) []ecsTypes.ContainerDefinition {
+	return []ecsTypes.ContainerDefinition{
+		{
+			Name:       aws.String("runner"),
+			Image:      aws.String(cfg.RunnerImage),
+			Essential:  aws.Bool(true),
+			Privileged: aws.Bool(true),
+			Command:    []string{"bash", "-c", inlineDindScript},
+			Environment: []ecsTypes.KeyValuePair{
+				{Name: aws.String("DOCKER_HOST"), Value: aws.String("unix:///var/run/docker.sock")},
+			},
+			// dockerd's data root must not sit on the container's overlay filesystem.
+			MountPoints: []ecsTypes.MountPoint{
+				{SourceVolume: aws.String("docker-data"), ContainerPath: aws.String("/var/lib/docker")},
 			},
 			LogConfiguration: logConfig(infra, cfg.Family),
 		},

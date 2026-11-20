@@ -1,6 +1,7 @@
 package reconciler
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -241,5 +242,60 @@ func TestBuildRegisterInput_LogStreamPrefix(t *testing.T) {
 				t.Errorf("init stream prefix = %q, want runner-small-init", prefix)
 			}
 		}
+	}
+}
+
+func TestBuildRegisterInput_InlineDinD(t *testing.T) {
+	cfg := &tomlcfg.ResolvedRunnerConfig{
+		Family:        "runner-docker",
+		CPU:           2048,
+		Memory:        4096,
+		Compatibility: "EC2",
+		NetworkMode:   "bridge",
+		OS:            "LINUX",
+		EnableDind:    true,
+		DindMode:      tomlcfg.DindModeInline,
+		RunnerImage:   "ghcr.io/actions/actions-runner:latest",
+		DindImage:     "docker:dind",
+		MaxRuntime:    6 * time.Hour,
+	}
+
+	input := BuildRegisterInput(cfg, testInfra)
+
+	if len(input.ContainerDefinitions) != 1 {
+		t.Fatalf("ContainerDefinitions = %d, want 1 (no sidecar, no init container)", len(input.ContainerDefinitions))
+	}
+	runner := input.ContainerDefinitions[0]
+	if aws.ToString(runner.Name) != "runner" {
+		t.Errorf("container name = %q, want runner", aws.ToString(runner.Name))
+	}
+	if aws.ToString(runner.Image) != cfg.RunnerImage {
+		t.Errorf("image = %q, want the runner image (dind_image is unused inline)", aws.ToString(runner.Image))
+	}
+	if !aws.ToBool(runner.Privileged) {
+		t.Error("runner must be privileged to run dockerd inline")
+	}
+	script := strings.Join(runner.Command, " ")
+	for _, want := range []string{"dockerd", "cgroup.subtree_control", "exec /home/runner/run.sh"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("command does not contain %q", want)
+		}
+	}
+	if len(input.Volumes) != 1 || aws.ToString(input.Volumes[0].Name) != "docker-data" {
+		t.Fatalf("Volumes = %+v, want only docker-data", input.Volumes)
+	}
+	if len(runner.MountPoints) != 1 || aws.ToString(runner.MountPoints[0].ContainerPath) != "/var/lib/docker" {
+		t.Errorf("MountPoints = %+v, want docker-data at /var/lib/docker", runner.MountPoints)
+	}
+}
+
+func TestBuildRegisterInput_InlineModeIgnoredWithoutDinD(t *testing.T) {
+	cfg := &tomlcfg.ResolvedRunnerConfig{
+		Family: "runner-plain", CPU: 1024, Memory: 2048, Compatibility: "FARGATE", NetworkMode: "awsvpc",
+		OS: "LINUX", EnableDind: false, DindMode: tomlcfg.DindModeInline, RunnerImage: "img",
+	}
+	input := BuildRegisterInput(cfg, testInfra)
+	if len(input.ContainerDefinitions) != 1 || aws.ToBool(input.ContainerDefinitions[0].Privileged) {
+		t.Fatalf("want one unprivileged runner container, got %+v", input.ContainerDefinitions)
 	}
 }
