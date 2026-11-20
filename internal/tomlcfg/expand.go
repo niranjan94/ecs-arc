@@ -161,6 +161,9 @@ func mergeDimensionEntry(r *RunnerConfig, d DimensionEntry) {
 	if d.EnableDind != nil {
 		r.EnableDind = d.EnableDind
 	}
+	if d.DindMode != nil {
+		r.DindMode = d.DindMode
+	}
 	if d.MaxRunners != nil {
 		r.MaxRunners = d.MaxRunners
 	}

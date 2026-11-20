@@ -27,6 +27,7 @@ type DefaultsConfig struct {
 	SecurityGroups   []string `toml:"security_groups"`
 	NetworkMode      string   `toml:"network_mode"`
 	EnableDind       *bool    `toml:"enable_dind"`
+	DindMode         string   `toml:"dind_mode"`
 	MaxRunners       *int     `toml:"max_runners"`
 	MinRunners       *int     `toml:"min_runners"`
 	MaxRuntime       string   `toml:"max_runtime"`
@@ -50,6 +51,7 @@ type RunnerConfig struct {
 	SecurityGroups   []string `toml:"security_groups"`
 	NetworkMode      *string  `toml:"network_mode"`
 	EnableDind       *bool    `toml:"enable_dind"`
+	DindMode         *string  `toml:"dind_mode"`
 	MaxRunners       *int     `toml:"max_runners"`
 	MinRunners       *int     `toml:"min_runners"`
 	MaxRuntime       *string  `toml:"max_runtime"`
@@ -65,6 +67,7 @@ type DimensionEntry struct {
 	Architecture     string   `toml:"architecture"`
 	OS               string   `toml:"os"`
 	EnableDind       *bool    `toml:"enable_dind"`
+	DindMode         *string  `toml:"dind_mode"`
 	MaxRunners       *int     `toml:"max_runners"`
 	MinRunners       *int     `toml:"min_runners"`
 	Compatibility    *string  `toml:"compatibility"`
@@ -113,6 +116,7 @@ type ResolvedRunnerConfig struct {
 	SecurityGroups   []string
 	NetworkMode      string
 	EnableDind       bool
+	DindMode         string // DindModeSidecar or DindModeInline; used only with EnableDind
 	MaxRunners       int
 	MinRunners       int
 	MaxRuntime       time.Duration
@@ -131,6 +135,14 @@ func Parse(data []byte) (*Config, error) {
 	}
 	return &cfg, nil
 }
+
+// DinD modes. Sidecar runs dockerd in its own container next to the runner;
+// inline runs dockerd inside the (privileged) runner container itself, so job
+// containers share the runner's network namespace and filesystem.
+const (
+	DindModeSidecar = "sidecar"
+	DindModeInline  = "inline"
+)
 
 // Hardcoded defaults for fields not set in [defaults] or per-runner.
 const (
@@ -196,6 +208,7 @@ func Resolve(cfg *Config) (map[string]*ResolvedRunnerConfig, error) {
 
 		// Bool fields
 		resolved.EnableDind = resolveBool(r.EnableDind, cfg.Defaults.EnableDind, false)
+		resolved.DindMode = resolveString(r.DindMode, cfg.Defaults.DindMode, DindModeSidecar)
 
 		// Int fields
 		resolved.MaxRunners = resolveInt(r.MaxRunners, cfg.Defaults.MaxRunners, defaultMaxRunners)
@@ -216,6 +229,10 @@ func Resolve(cfg *Config) (map[string]*ResolvedRunnerConfig, error) {
 		// Validation
 		if err := validateArchitecture(resolved.Architecture); err != nil {
 			return nil, fmt.Errorf("runner %q: %w", r.Family, err)
+		}
+		if resolved.DindMode != DindModeSidecar && resolved.DindMode != DindModeInline {
+			return nil, fmt.Errorf("runner %q: dind_mode must be %q or %q, got %q",
+				r.Family, DindModeSidecar, DindModeInline, resolved.DindMode)
 		}
 
 		// FARGATE + DinD conflict: force DinD off

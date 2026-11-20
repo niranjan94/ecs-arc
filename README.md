@@ -141,6 +141,32 @@ extra_labels = ["gpu"]
 
 Updating the config source is the only way to add, remove, or resize scale sets at runtime.
 
+### Docker in jobs (`enable_dind`, `dind_mode`)
+
+`enable_dind = true` gives a runner its own Docker daemon. `dind_mode` picks where that daemon runs:
+
+| `dind_mode` | Daemon | Containers in the task |
+|---|---|---|
+| `sidecar` (default) | `dockerd` in a separate privileged container (`dind_image`) | init + dind + runner |
+| `inline` | `dockerd` inside the runner container, which becomes privileged | runner only |
+
+The difference shows in `bridge` network mode (the usual choice for `EC2` and `EXTERNAL` capacity), where every container of a task has its own network namespace and filesystem:
+
+- **Service containers.** With a sidecar, `services:` and `docker run -p` publish ports on the dind container, so `localhost:5432` from a job step finds nothing. Inline, the daemon shares the runner's network namespace and they answer on `localhost`, as on GitHub-hosted runners.
+- **Bind mounts.** `docker run -v /tmp/x:/x` resolves `/tmp/x` on the daemon's filesystem. A sidecar only shares `/home/runner/_work`, so files a step writes anywhere else (`/tmp`, `$HOME/.aws`, ...) are missing in the container. Inline, every path is the runner's own.
+
+Inline mode needs `dockerd`, `iptables` and passwordless `sudo` in the runner image; the default runner image has all three. It starts the daemon before the runner registers (a few seconds) and sets up cgroup v2 delegation the way moby's `hack/dind` does, so containers with resource limits work. Extra daemon flags, e.g. `--registry-mirror=...`, can be set in the runner image as `DOCKERD_ARGS`.
+
+```toml
+[defaults]
+compatibility = "EC2"
+network_mode  = "bridge"
+enable_dind   = true
+dind_mode     = "inline"
+```
+
+`dind_mode` can be set in `[defaults]`, per `[[runner]]`, or per template dimension, like `enable_dind`.
+
 ## IAM Permissions
 
 The CloudFormation template creates all required IAM roles automatically. If you are setting up IAM manually, the controller task role needs the following permissions:
